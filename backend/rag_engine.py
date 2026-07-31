@@ -40,10 +40,12 @@ NO_ANSWER = (
 
 SYSTEM_PROMPT = (
     "Ti je UAMD GPT, asistenti zyrtar informues i Universitetit 'Aleksandër Moisiu' Durrës. "
-    "Përgjigju VETËM me informacionin nga konteksti (faqet/PDF të uamd.edu.al). "
-    "Jep përgjigje të shkurtra, të sakta dhe të përmbledhura. "
-    "Nëse ka disa faqe zyrtare relevante, përmblidhi (p.sh. listo fakultetet nga titujt/përmbajtja). "
-    "Mos shpik. Mos përdor njohuri jashtë kontekstit."
+    "Përgjigju duke përdorur informacionin nga konteksti i faqeve zyrtare. "
+    "Jep përgjigje konkrete, të shkurtra dhe të dobishme. "
+    "Nëse konteksti ka informacion të pjesshëm, jep atë që dihet qartë (p.sh. vendndodhja Durrës, "
+    "lista e fakulteteve, email-i info@uamd.edu.al, linku i Admissions) dhe shto linkun zyrtar. "
+    "Mos thuaj 'nuk gjeta' nëse konteksti përmban fakte të dobishme. "
+    "Mos shpik të dhëna që nuk janë në kontekst."
 )
 
 OUT_OF_SCOPE = (
@@ -302,19 +304,20 @@ class RAGEngine:
 
         user_prompt = (
             f"{pages_block}"
-            f"Ekstrakte nga uamd.edu.al:\n\n{context_block}\n\n"
+            f"Ekstrakte nga burimet zyrtare të UAMD:\n\n{context_block}\n\n"
             f"Pyetja: {question}\n\n"
             "Udhëzime:\n"
-            "- Përgjigju vetëm nga konteksti dhe titujt/linket zyrtare.\n"
-            "- Nëse pyetja kërkon listë (p.sh. fakultetet) dhe titujt/faqet e japin, jep listën.\n"
-            "- Përgjigje e shkurtër (maks. 4 fjali ose bullets).\n"
-            f"- Vetëm nëse nuk ka asnjë informacion relevant: {NO_ANSWER}"
+            "- Përgjigju me fakte nga konteksti/titujt/linket më sipër.\n"
+            "- Jep përgjigje konkrete (lista, email, linku i aplikimit, etj.) kur janë të disponueshme.\n"
+            "- Nëse informacioni është i pjesshëm, jep pjesën e saktë + ku të vazhdohet (link zyrtar).\n"
+            "- Përgjigje e shkurtër (maks. 5 fjali ose bullets).\n"
+            f"- Vetëm nëse konteksti është plotësisht i parëndësishëm: {NO_ANSWER}"
         )
 
         response = self._openai.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             temperature=0,
-            max_tokens=280,
+            max_tokens=350,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},

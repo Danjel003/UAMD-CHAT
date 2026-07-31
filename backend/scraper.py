@@ -20,12 +20,14 @@ import requests
 from bs4 import BeautifulSoup
 
 ALLOWED_HOSTS = {"uamd.edu.al", "www.uamd.edu.al"}
+# Official portals linked from uamd.edu.al (admissions system)
+ALLOWED_EXTRA_HOSTS = {"admissions.prime-solutions.al"}
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
 REQUEST_TIMEOUT = 12
-MAX_HTML_CHARS = 18_000  # enough for RAG, faster embedding
+MAX_HTML_CHARS = 22_000
 MAX_PDF_CHARS = 24_000
 MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
 PAGE_CACHE_TTL = 1800  # 30 minutes
@@ -49,6 +51,18 @@ def is_uamd_url(url: str) -> bool:
     try:
         host = urlparse(url).netloc.lower()
         return host in ALLOWED_HOSTS or host.endswith(".uamd.edu.al")
+    except Exception:
+        return False
+
+
+def is_allowed_url(url: str) -> bool:
+    try:
+        host = urlparse(url).netloc.lower()
+        if host in ALLOWED_HOSTS or host.endswith(".uamd.edu.al"):
+            return True
+        if host in ALLOWED_EXTRA_HOSTS:
+            return True
+        return False
     except Exception:
         return False
 
@@ -93,16 +107,39 @@ def extract_html_text(html: str, base_url: str) -> dict[str, Any]:
     if h1 and h1.get_text(strip=True):
         title = h1.get_text(strip=True) or title
 
-    # Prefer main content, but don't strip nav before collecting title-like signals
+    # Keep footer (often has contact / about text)
+    footer_text = ""
+    footer = soup.find("footer")
+    if footer:
+        footer_text = clean_text(footer.get_text("\n", strip=True))
+
+    # Collect mailto / tel before stripping chrome
+    contacts: list[str] = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if href.startswith("mailto:"):
+            contacts.append(f"Email: {href.replace('mailto:', '')}")
+        elif href.startswith("tel:"):
+            contacts.append(f"Tel: {href.replace('tel:', '')}")
+
     main = soup.find("main") or soup.find("article") or soup.find(attrs={"role": "main"})
     if main is None:
-        # Remove chrome only as fallback when no <main>
-        for selector in ["nav", "footer", "header", ".menu", "#menu", ".sidebar"]:
-            for node in soup.select(selector):
-                node.decompose()
-        main = soup.find("body") or soup
+        body = soup.find("body") or soup
+        # clone-ish: use body text but try to drop huge menus by taking content divs
+        content = body.find(class_=re.compile(r"(entry-content|post-content|content|elementor-widget-theme-post-content)", re.I))
+        main = content or body
 
     text = clean_text(main.get_text("\n", strip=True))
+
+    extras = []
+    if contacts:
+        extras.append("Kontaktet e gjetura në faqe:\n" + "\n".join(dict.fromkeys(contacts)))
+    if footer_text and len(footer_text) > 40:
+        extras.append("Informacion nga footer:\n" + footer_text[:2500])
+
+    if extras:
+        text = (text + "\n\n" + "\n\n".join(extras)).strip()
+
     if len(text) > MAX_HTML_CHARS:
         text = text[:MAX_HTML_CHARS]
 
@@ -153,9 +190,9 @@ def _cache_set(url: str, doc: dict[str, Any]) -> None:
 
 
 def fetch_url(url: str, use_cache: bool = True) -> dict[str, Any]:
-    """Download and extract content from a single uamd.edu.al URL."""
+    """Download and extract content from an allowed official URL."""
     url = normalize_url(url)
-    if not is_uamd_url(url):
+    if not is_allowed_url(url):
         return {
             "url": url,
             "title": "",
@@ -175,7 +212,7 @@ def fetch_url(url: str, use_cache: bool = True) -> dict[str, Any]:
         with _session() as session:
             resp = session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True, stream=True)
             final_url = normalize_url(resp.url)
-            if not is_uamd_url(final_url):
+            if not is_allowed_url(final_url):
                 return {
                     "url": url,
                     "title": "",
@@ -265,7 +302,7 @@ def fetch_many(
     seen: set[str] = set()
     for u in urls:
         nu = normalize_url(u)
-        if is_uamd_url(nu) and nu not in seen:
+        if is_allowed_url(nu) and nu not in seen:
             seen.add(nu)
             pending.append(nu)
         if len(pending) >= max_docs:
