@@ -55,9 +55,11 @@ def is_uamd_url(url: str) -> bool:
         return False
 
 
+# Also allow direct file URLs on the university domain (xlsx/pdf uploads)
 def is_allowed_url(url: str) -> bool:
     try:
-        host = urlparse(url).netloc.lower()
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
         if host in ALLOWED_HOSTS or host.endswith(".uamd.edu.al"):
             return True
         if host in ALLOWED_EXTRA_HOSTS:
@@ -107,53 +109,84 @@ def extract_html_text(html: str, base_url: str) -> dict[str, Any]:
     if h1 and h1.get_text(strip=True):
         title = h1.get_text(strip=True) or title
 
-    # Keep footer (often has contact / about text)
     footer_text = ""
     footer = soup.find("footer")
     if footer:
         footer_text = clean_text(footer.get_text("\n", strip=True))
 
-    # Collect mailto / tel before stripping chrome
     contacts: list[str] = []
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
         if href.startswith("mailto:"):
-            contacts.append(f"Email: {href.replace('mailto:', '')}")
+            email = href.replace("mailto:", "").split("?")[0].strip()
+            if email and email != "#":
+                contacts.append(f"Email: {email}")
         elif href.startswith("tel:"):
             contacts.append(f"Tel: {href.replace('tel:', '')}")
 
-    main = soup.find("main") or soup.find("article") or soup.find(attrs={"role": "main"})
-    if main is None:
+    # UAMD uses Kingster / GoodLayers page builder — prefer those containers
+    candidates: list[str] = []
+    for sel in [
+        "main",
+        "article",
+        "[role='main']",
+        "#kingster-page-wrapper",
+        ".gdlr-core-page-builder-body",
+        ".gdlr-core-pbf-wrapper",
+        ".entry-content",
+        ".post-content",
+        ".elementor-widget-theme-post-content",
+    ]:
+        for el in soup.select(sel):
+            txt = clean_text(el.get_text("\n", strip=True))
+            if len(txt) >= 80:
+                candidates.append(txt)
+
+    if not candidates:
         body = soup.find("body") or soup
-        # clone-ish: use body text but try to drop huge menus by taking content divs
-        content = body.find(class_=re.compile(r"(entry-content|post-content|content|elementor-widget-theme-post-content)", re.I))
-        main = content or body
+        candidates.append(clean_text(body.get_text("\n", strip=True)))
 
-    text = clean_text(main.get_text("\n", strip=True))
+    # Longest block wins (avoids empty theme "content" shells)
+    text = max(candidates, key=len)
+    if footer_text and footer_text in text:
+        text = text.replace(footer_text, "").strip()
 
-    extras = []
+    extras: list[str] = []
     if contacts:
         extras.append("Kontaktet e gjetura në faqe:\n" + "\n".join(dict.fromkeys(contacts)))
     if footer_text and len(footer_text) > 40:
-        extras.append("Informacion nga footer:\n" + footer_text[:2500])
-
+        short_footer = footer_text.split("Menu")[0].strip()
+        if len(short_footer) > 40:
+            extras.append("Informacion nga footer:\n" + short_footer[:1200])
     if extras:
         text = (text + "\n\n" + "\n\n".join(extras)).strip()
-
     if len(text) > MAX_HTML_CHARS:
         text = text[:MAX_HTML_CHARS]
 
     pdf_links: list[str] = []
+    file_links: list[str] = []
+    child_links: list[str] = []
     for a in soup.find_all("a", href=True):
-        href = urljoin(base_url, a["href"])
-        href = normalize_url(href)
-        if is_uamd_url(href) and is_pdf_url(href):
+        href = normalize_url(urljoin(base_url, a["href"]))
+        low = href.lower()
+        host_ok = is_uamd_url(href) or "uamd.edu.al" in urlparse(href).netloc
+        if not host_ok:
+            continue
+        if low.endswith(".pdf"):
             pdf_links.append(href)
+            file_links.append(href)
+        elif low.endswith((".xlsx", ".xls")):
+            file_links.append(href)
+        path = urlparse(href).path.lower()
+        if any(k in path for k in ("departament", "bachelor", "master", "program")):
+            child_links.append(href)
 
     return {
         "title": title,
         "text": text,
-        "pdf_links": list(dict.fromkeys(pdf_links))[:5],
+        "pdf_links": list(dict.fromkeys(pdf_links))[:8],
+        "file_links": list(dict.fromkeys(file_links))[:8],
+        "child_links": list(dict.fromkeys(child_links))[:8],
     }
 
 
@@ -161,7 +194,6 @@ def extract_pdf_text(content: bytes) -> str:
     doc = fitz.open(stream=io.BytesIO(content), filetype="pdf")
     parts: list[str] = []
     try:
-        # First pages are usually enough for official docs
         for page in list(doc)[:20]:
             parts.append(page.get_text("text"))
     finally:
@@ -170,6 +202,33 @@ def extract_pdf_text(content: bytes) -> str:
     if len(text) > MAX_PDF_CHARS:
         text = text[:MAX_PDF_CHARS]
     return text
+
+
+def extract_xlsx_text(content: bytes) -> str:
+    """Extract readable strings from xlsx without openpyxl."""
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            names = set(zf.namelist())
+            texts: list[str] = []
+            if "xl/sharedStrings.xml" in names:
+                xml = zf.read("xl/sharedStrings.xml").decode("utf-8", errors="ignore")
+                texts = re.findall(r"<t[^>]*>(.*?)</t>", xml)
+            # Fallback: scan worksheets for inline strings
+            if not texts:
+                for name in names:
+                    if name.startswith("xl/worksheets/") and name.endswith(".xml"):
+                        xml = zf.read(name).decode("utf-8", errors="ignore")
+                        texts.extend(re.findall(r"<t[^>]*>(.*?)</t>", xml))
+            cleaned = []
+            for t in texts:
+                t = re.sub(r"\s+", " ", t).strip()
+                if t:
+                    cleaned.append(t)
+            return clean_text("\n".join(dict.fromkeys(cleaned)))
+    except Exception:
+        return ""
 
 
 def _cache_get(url: str) -> dict[str, Any] | None:
@@ -260,8 +319,24 @@ def fetch_url(url: str, use_cache: bool = True) -> dict[str, Any]:
                     "text": text,
                     "content_type": "application/pdf",
                     "pdf_links": [],
+                    "file_links": [],
+                    "child_links": [],
                     "ok": bool(text.strip()),
                     "error": None if text.strip() else "empty_pdf",
+                }
+            elif final_url.lower().endswith((".xlsx", ".xls")) or "spreadsheet" in content_type:
+                text = extract_xlsx_text(raw)
+                title = urlparse(final_url).path.split("/")[-1] or "tabele.xlsx"
+                doc = {
+                    "url": final_url,
+                    "title": title,
+                    "text": f"Të dhëna nga dokumenti tabular {title}:\n{text}",
+                    "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "pdf_links": [],
+                    "file_links": [],
+                    "child_links": [],
+                    "ok": bool(text.strip()),
+                    "error": None if text.strip() else "empty_xlsx",
                 }
             else:
                 html = raw.decode(resp.encoding or "utf-8", errors="replace")
@@ -271,7 +346,9 @@ def fetch_url(url: str, use_cache: bool = True) -> dict[str, Any]:
                     "title": extracted["title"],
                     "text": extracted["text"],
                     "content_type": "text/html",
-                    "pdf_links": extracted["pdf_links"],
+                    "pdf_links": extracted.get("pdf_links") or [],
+                    "file_links": extracted.get("file_links") or [],
+                    "child_links": extracted.get("child_links") or [],
                     "ok": bool(extracted["text"].strip()),
                     "error": None if extracted["text"].strip() else "empty_html",
                 }
@@ -297,8 +374,8 @@ def fetch_many(
     max_docs: int = 5,
     include_pdfs: bool = False,
 ) -> list[dict[str, Any]]:
-    """Fetch unique uamd URLs in parallel."""
-    pending = []
+    """Fetch unique official URLs in parallel, then enrich with department/program files."""
+    pending: list[str] = []
     seen: set[str] = set()
     for u in urls:
         nu = normalize_url(u)
@@ -319,29 +396,43 @@ def fetch_many(
             if doc.get("ok") and doc.get("text"):
                 results.append(doc)
 
-    # Optional: only pull PDFs when explicitly useful (slower)
-    if include_pdfs and len(results) < max_docs:
-        pdfs: list[str] = []
-        for doc in list(results):
+    # Enrich with department pages + tabular/PDF attachments discovered on faculty pages
+    extra: list[str] = []
+    for doc in list(results):
+        for link in (doc.get("child_links") or []) + (doc.get("file_links") or []):
+            if link not in seen and is_allowed_url(link):
+                seen.add(link)
+                extra.append(link)
+        if include_pdfs:
             for pdf in doc.get("pdf_links") or []:
-                if pdf not in seen:
+                if pdf not in seen and is_allowed_url(pdf):
                     seen.add(pdf)
-                    pdfs.append(pdf)
-                if len(results) + len(pdfs) >= max_docs:
-                    break
-        if pdfs:
-            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(pdfs))) as pool:
-                for fut in as_completed({pool.submit(fetch_url, u): u for u in pdfs}):
-                    doc = fut.result()
-                    if doc.get("ok") and doc.get("text"):
-                        results.append(doc)
-                        if len(results) >= max_docs:
-                            break
+                    extra.append(pdf)
+        if len(results) + len(extra) >= max_docs + 3:
+            break
 
-    # Preserve approximate search-rank order
-    order = {u: i for i, u in enumerate(pending)}
+    # Always try known FTI department/xlsx if faculty page was requested
+    for u in pending:
+        if "teknologjise-se-informacionit" in u or "/fti" in u:
+            for bonus in [
+                "https://uamd.edu.al/departamenti-i-teknologjise-se-informacionit/",
+                "https://uamd.edu.al/wp-content/uploads/2024/04/FTI.xlsx",
+            ]:
+                if bonus not in seen:
+                    seen.add(bonus)
+                    extra.append(bonus)
+
+    extra = extra[: max(0, (max_docs + 3) - len(results))]
+    if extra:
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(extra))) as pool:
+            for fut in as_completed({pool.submit(fetch_url, u): u for u in extra}):
+                doc = fut.result()
+                if doc.get("ok") and doc.get("text"):
+                    results.append(doc)
+
+    order = {u: i for i, u in enumerate(pending + extra)}
     results.sort(key=lambda d: order.get(normalize_url(d["url"]), 999))
-    return results[:max_docs]
+    return results[: max(max_docs, min(len(results), max_docs + 2))]
 
 
 def content_hash(text: str) -> str:

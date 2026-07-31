@@ -36,6 +36,16 @@ SEED_URLS = [
 # Curated official pages for common intents (accuracy boost)
 INTENT_SEEDS: list[tuple[list[str], list[dict[str, str]]]] = [
     (
+        ["fti", "teknologjis", "teknologji informacioni", "informatik", "softuer", "program studimi", "programe studimi", "cikli", "bachelor", "master"],
+        [
+            {"url": "https://uamd.edu.al/fakulteti-i-teknologjise-se-informacionit/", "title": "Fakulteti i Teknologjisë së Informacionit (FTI)"},
+            {"url": "https://uamd.edu.al/departamenti-i-teknologjise-se-informacionit/", "title": "Departamenti i Teknologjisë së Informacionit"},
+            {"url": "https://uamd.edu.al/wp-content/uploads/2024/04/FTI.xlsx", "title": "Programet e studimit FTI (tabelë zyrtare)"},
+            {"url": "https://uamd.edu.al/fakulteti-i-biznesit/", "title": "Fakulteti i Biznesit"},
+            {"url": "https://uamd.edu.al/fakulteti-i-edukimit/", "title": "Fakulteti i Edukimit"},
+        ],
+    ),
+    (
         ["fakultet", "fakulteti", "fakultetet", "akademi", "dega", "deget"],
         [
             {"url": "https://uamd.edu.al/fakulteti-i-biznesit/", "title": "Fakulteti i Biznesit"},
