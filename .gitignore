@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+backend/.venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+dist/
+build/
+.DS_Store
+.env
+backend/.env
+
+# Runtime data
+backend/uploads/*.pdf
+!backend/uploads/.gitkeep
+backend/chroma_db/**
+!backend/chroma_db/.gitkeep
+backend/cache/**
+!backend/cache/.gitkeep
+backend/.venv/
+
+# Keep production requirements; ignore local model caches
+*.pt
+*.bin
+*.safetensors
+
+# Logs / IDE
+*.log
+.idea/
+.vscode/
+*.swp

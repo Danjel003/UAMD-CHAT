@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: uamd-gpt-backend
+    runtime: docker
+    rootDir: backend
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: EMBEDDING_BACKEND
+        value: openai
+      - key: FLASK_DEBUG
+        value: "false"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false

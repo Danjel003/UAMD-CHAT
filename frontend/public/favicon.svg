@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect width="64" height="64" rx="14" fill="#0a1f3d"/>
+  <path d="M32 10L48 18V30C48 40 40.5 48.5 32 52C23.5 48.5 16 40 16 30V18L32 10Z" stroke="#ffffff" stroke-width="2.5" fill="rgba(42,99,196,0.35)"/>
+  <text x="32" y="36" text-anchor="middle" fill="#ffffff" font-family="Georgia, serif" font-size="14" font-weight="700">U</text>
+</svg>

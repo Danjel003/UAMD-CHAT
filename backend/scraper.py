@@ -1,0 +1,311 @@
+"""
+UAMD GPT — Domain-restricted scraper for uamd.edu.al
+Fetches HTML pages (BeautifulSoup) and PDF documents (PyMuPDF).
+Optimized: parallel downloads + in-memory page cache.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
+from urllib.parse import urljoin, urlparse, urlunparse
+
+import fitz  # PyMuPDF
+import requests
+from bs4 import BeautifulSoup
+
+ALLOWED_HOSTS = {"uamd.edu.al", "www.uamd.edu.al"}
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+REQUEST_TIMEOUT = 12
+MAX_HTML_CHARS = 18_000  # enough for RAG, faster embedding
+MAX_PDF_CHARS = 24_000
+MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
+PAGE_CACHE_TTL = 1800  # 30 minutes
+MAX_WORKERS = 5
+
+_page_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_cache_lock = threading.Lock()
+
+
+def normalize_url(url: str) -> str:
+    parsed = urlparse(url.strip())
+    scheme = parsed.scheme or "https"
+    netloc = parsed.netloc.lower()
+    path = re.sub(r"/{2,}", "/", parsed.path or "/")
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
+    return urlunparse((scheme, netloc, path, "", parsed.query, ""))
+
+
+def is_uamd_url(url: str) -> bool:
+    try:
+        host = urlparse(url).netloc.lower()
+        return host in ALLOWED_HOSTS or host.endswith(".uamd.edu.al")
+    except Exception:
+        return False
+
+
+def is_pdf_url(url: str, content_type: str | None = None) -> bool:
+    path = urlparse(url).path.lower()
+    if path.endswith(".pdf"):
+        return True
+    if content_type and "application/pdf" in content_type.lower():
+        return True
+    return False
+
+
+def _session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update(
+        {
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/pdf,*/*;q=0.8",
+            "Accept-Language": "sq,en;q=0.8",
+        }
+    )
+    return s
+
+
+def clean_text(text: str) -> str:
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def extract_html_text(html: str, base_url: str) -> dict[str, Any]:
+    soup = BeautifulSoup(html, "lxml")
+
+    for tag in soup(["script", "style", "noscript", "svg", "iframe", "form"]):
+        tag.decompose()
+
+    title = ""
+    if soup.title and soup.title.string:
+        title = soup.title.string.strip()
+    h1 = soup.find("h1")
+    if h1 and h1.get_text(strip=True):
+        title = h1.get_text(strip=True) or title
+
+    # Prefer main content, but don't strip nav before collecting title-like signals
+    main = soup.find("main") or soup.find("article") or soup.find(attrs={"role": "main"})
+    if main is None:
+        # Remove chrome only as fallback when no <main>
+        for selector in ["nav", "footer", "header", ".menu", "#menu", ".sidebar"]:
+            for node in soup.select(selector):
+                node.decompose()
+        main = soup.find("body") or soup
+
+    text = clean_text(main.get_text("\n", strip=True))
+    if len(text) > MAX_HTML_CHARS:
+        text = text[:MAX_HTML_CHARS]
+
+    pdf_links: list[str] = []
+    for a in soup.find_all("a", href=True):
+        href = urljoin(base_url, a["href"])
+        href = normalize_url(href)
+        if is_uamd_url(href) and is_pdf_url(href):
+            pdf_links.append(href)
+
+    return {
+        "title": title,
+        "text": text,
+        "pdf_links": list(dict.fromkeys(pdf_links))[:5],
+    }
+
+
+def extract_pdf_text(content: bytes) -> str:
+    doc = fitz.open(stream=io.BytesIO(content), filetype="pdf")
+    parts: list[str] = []
+    try:
+        # First pages are usually enough for official docs
+        for page in list(doc)[:20]:
+            parts.append(page.get_text("text"))
+    finally:
+        doc.close()
+    text = clean_text("\n\n".join(parts))
+    if len(text) > MAX_PDF_CHARS:
+        text = text[:MAX_PDF_CHARS]
+    return text
+
+
+def _cache_get(url: str) -> dict[str, Any] | None:
+    with _cache_lock:
+        item = _page_cache.get(url)
+        if not item:
+            return None
+        ts, doc = item
+        if time.time() - ts > PAGE_CACHE_TTL:
+            _page_cache.pop(url, None)
+            return None
+        return dict(doc)
+
+
+def _cache_set(url: str, doc: dict[str, Any]) -> None:
+    with _cache_lock:
+        _page_cache[url] = (time.time(), dict(doc))
+
+
+def fetch_url(url: str, use_cache: bool = True) -> dict[str, Any]:
+    """Download and extract content from a single uamd.edu.al URL."""
+    url = normalize_url(url)
+    if not is_uamd_url(url):
+        return {
+            "url": url,
+            "title": "",
+            "text": "",
+            "content_type": "",
+            "ok": False,
+            "error": "domain_not_allowed",
+        }
+
+    if use_cache:
+        cached = _cache_get(url)
+        if cached is not None:
+            cached["cached"] = True
+            return cached
+
+    try:
+        with _session() as session:
+            resp = session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True, stream=True)
+            final_url = normalize_url(resp.url)
+            if not is_uamd_url(final_url):
+                return {
+                    "url": url,
+                    "title": "",
+                    "text": "",
+                    "content_type": "",
+                    "ok": False,
+                    "error": "redirect_outside_domain",
+                }
+
+            content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in resp.iter_content(chunk_size=65536):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > MAX_DOWNLOAD_BYTES:
+                    return {
+                        "url": final_url,
+                        "title": "",
+                        "text": "",
+                        "content_type": content_type,
+                        "ok": False,
+                        "error": "file_too_large",
+                    }
+                chunks.append(chunk)
+            raw = b"".join(chunks)
+
+            if resp.status_code >= 400:
+                return {
+                    "url": final_url,
+                    "title": "",
+                    "text": "",
+                    "content_type": content_type,
+                    "ok": False,
+                    "error": f"http_{resp.status_code}",
+                }
+
+            if is_pdf_url(final_url, content_type):
+                text = extract_pdf_text(raw)
+                title = urlparse(final_url).path.split("/")[-1] or "dokument.pdf"
+                doc = {
+                    "url": final_url,
+                    "title": title,
+                    "text": text,
+                    "content_type": "application/pdf",
+                    "pdf_links": [],
+                    "ok": bool(text.strip()),
+                    "error": None if text.strip() else "empty_pdf",
+                }
+            else:
+                html = raw.decode(resp.encoding or "utf-8", errors="replace")
+                extracted = extract_html_text(html, final_url)
+                doc = {
+                    "url": final_url,
+                    "title": extracted["title"],
+                    "text": extracted["text"],
+                    "content_type": "text/html",
+                    "pdf_links": extracted["pdf_links"],
+                    "ok": bool(extracted["text"].strip()),
+                    "error": None if extracted["text"].strip() else "empty_html",
+                }
+
+            if doc.get("ok"):
+                _cache_set(final_url, doc)
+                if final_url != url:
+                    _cache_set(url, doc)
+            return doc
+    except Exception as exc:
+        return {
+            "url": url,
+            "title": "",
+            "text": "",
+            "content_type": "",
+            "ok": False,
+            "error": str(exc),
+        }
+
+
+def fetch_many(
+    urls: list[str],
+    max_docs: int = 5,
+    include_pdfs: bool = False,
+) -> list[dict[str, Any]]:
+    """Fetch unique uamd URLs in parallel."""
+    pending = []
+    seen: set[str] = set()
+    for u in urls:
+        nu = normalize_url(u)
+        if is_uamd_url(nu) and nu not in seen:
+            seen.add(nu)
+            pending.append(nu)
+        if len(pending) >= max_docs:
+            break
+
+    results: list[dict[str, Any]] = []
+    if not pending:
+        return results
+
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(pending))) as pool:
+        futures = {pool.submit(fetch_url, url): url for url in pending}
+        for fut in as_completed(futures):
+            doc = fut.result()
+            if doc.get("ok") and doc.get("text"):
+                results.append(doc)
+
+    # Optional: only pull PDFs when explicitly useful (slower)
+    if include_pdfs and len(results) < max_docs:
+        pdfs: list[str] = []
+        for doc in list(results):
+            for pdf in doc.get("pdf_links") or []:
+                if pdf not in seen:
+                    seen.add(pdf)
+                    pdfs.append(pdf)
+                if len(results) + len(pdfs) >= max_docs:
+                    break
+        if pdfs:
+            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(pdfs))) as pool:
+                for fut in as_completed({pool.submit(fetch_url, u): u for u in pdfs}):
+                    doc = fut.result()
+                    if doc.get("ok") and doc.get("text"):
+                        results.append(doc)
+                        if len(results) >= max_docs:
+                            break
+
+    # Preserve approximate search-rank order
+    order = {u: i for i, u in enumerate(pending)}
+    results.sort(key=lambda d: order.get(normalize_url(d["url"]), 999))
+    return results[:max_docs]
+
+
+def content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]

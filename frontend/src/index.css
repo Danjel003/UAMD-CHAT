@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", Georgia, serif;
+  --color-uamd-950: #061428;
+  --color-uamd-900: #0a1f3d;
+  --color-uamd-800: #0f2d5c;
+  --color-uamd-700: #163a75;
+  --color-uamd-600: #1e4d9a;
+  --color-uamd-500: #2a63c4;
+  --color-uamd-400: #4d82d9;
+  --color-uamd-100: #e8eef8;
+  --color-uamd-50: #f4f7fc;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    color: var(--color-uamd-950);
+    background: var(--color-uamd-950);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.55;
+  }
+  70% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+}
+
+@keyframes float-soft {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.55s ease-out both;
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 1.6s ease-out infinite;
+}
+
+.animate-float-soft {
+  animation: float-soft 5s ease-in-out infinite;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin-slow 0.75s linear infinite;
+}
+
+.bg-mesh {
+  background-color: #061428;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(42, 99, 196, 0.45), transparent),
+    radial-gradient(ellipse 50% 40% at 100% 0%, rgba(30, 77, 154, 0.25), transparent),
+    radial-gradient(ellipse 40% 30% at 0% 100%, rgba(15, 45, 92, 0.5), transparent),
+    linear-gradient(180deg, #061428 0%, #0a1f3d 45%, #061428 100%);
+}
+
+.grid-overlay {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, black, transparent);
+}
+
+.answer-prose {
+  white-space: pre-wrap;
+  line-height: 1.7;
+  font-size: 1.05rem;
+  color: #1a2744;
+}
+
+.answer-prose strong {
+  color: #0a1f3d;
+}
