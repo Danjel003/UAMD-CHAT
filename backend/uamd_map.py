@@ -110,7 +110,9 @@ FACULTIES: list[dict[str, Any]] = [
             "https://uamd.edu.al/departamenti-i-shkencave-politike/",
             "https://uamd.edu.al/departamenti-i-administrimit-publik/",
         ],
-        "files": [],
+        "files": [
+            "https://uamd.edu.al/wp-content/uploads/2024/04/FSHPJ.xlsx",
+        ],
     },
     {
         "id": "fti",
