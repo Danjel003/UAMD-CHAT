@@ -17,11 +17,12 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 from scraper import is_allowed_url, normalize_url
+from uamd_map import deep_urls_for_question
 
 load_dotenv()
 
 SITE_FILTER = "site:uamd.edu.al"
-MAX_RESULTS = 5
+MAX_RESULTS = 8
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -368,13 +369,23 @@ def crawl_uamd_site(query: str, max_results: int = MAX_RESULTS) -> list[dict[str
 
 def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, Any]]:
     """
-    Hybrid search prioritized for accuracy on common university questions.
+    Deep hybrid search on uamd.edu.al:
+    faculty/department graph → intent seeds → APIs → WP search → crawl → DDG.
     """
     query = (query or "").strip()
     if not query:
         return []
 
     merged: list[dict[str, Any]] = []
+
+    # 1) Deep faculty/department expansion (critical for program questions)
+    deep_hits = [
+        _as_hit(item["url"], item.get("title", ""), provider="deep")
+        for item in deep_urls_for_question(query, limit=max(max_results, 12))
+    ]
+    if deep_hits:
+        print(f"[search] deep map → {len(deep_hits)}")
+        merged.extend(deep_hits)
 
     intent_hits = intent_seed_search(query, max_results=max_results)
     if intent_hits:
@@ -390,7 +401,8 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
         if hits:
             print(f"[search] {provider.__name__} → {len(hits)}")
             merged.extend(hits)
-        if len(_dedupe(merged, max_results)) >= max_results and intent_hits:
+        # Keep collecting a bit, but stop early if we already have a rich deep set
+        if len(_dedupe(merged, max_results)) >= max_results and deep_hits:
             break
 
     results = _dedupe(merged, max_results)

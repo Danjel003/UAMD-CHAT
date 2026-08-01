@@ -41,9 +41,16 @@ def normalize_url(url: str) -> str:
     parsed = urlparse(url.strip())
     scheme = parsed.scheme or "https"
     netloc = parsed.netloc.lower()
+    if netloc.startswith("www."):
+        # Prefer apex host for UAMD consistency
+        if netloc == "www.uamd.edu.al":
+            netloc = "uamd.edu.al"
     path = re.sub(r"/{2,}", "/", parsed.path or "/")
     if path != "/" and path.endswith("/"):
-        path = path.rstrip("/")
+        # keep trailing slash only for non-file paths
+        if not any(path.lower().endswith(ext) for ext in (".pdf", ".xlsx", ".xls", ".doc", ".docx")):
+            path = path  # keep as-is without forcing
+    # remove accidental empty segments already handled
     return urlunparse((scheme, netloc, path, "", parsed.query, ""))
 
 
@@ -371,10 +378,12 @@ def fetch_url(url: str, use_cache: bool = True) -> dict[str, Any]:
 
 def fetch_many(
     urls: list[str],
-    max_docs: int = 5,
+    max_docs: int = 8,
     include_pdfs: bool = False,
 ) -> list[dict[str, Any]]:
-    """Fetch unique official URLs in parallel, then enrich with department/program files."""
+    """Fetch unique official URLs in parallel, then enrich with departments/files."""
+    from uamd_map import FACULTIES
+
     pending: list[str] = []
     seen: set[str] = set()
     for u in urls:
@@ -396,33 +405,37 @@ def fetch_many(
             if doc.get("ok") and doc.get("text"):
                 results.append(doc)
 
-    # Enrich with department pages + tabular/PDF attachments discovered on faculty pages
     extra: list[str] = []
     for doc in list(results):
         for link in (doc.get("child_links") or []) + (doc.get("file_links") or []):
+            link = normalize_url(link)
             if link not in seen and is_allowed_url(link):
                 seen.add(link)
                 extra.append(link)
         if include_pdfs:
             for pdf in doc.get("pdf_links") or []:
+                pdf = normalize_url(pdf)
                 if pdf not in seen and is_allowed_url(pdf):
                     seen.add(pdf)
                     extra.append(pdf)
-        if len(results) + len(extra) >= max_docs + 3:
-            break
 
-    # Always try known FTI department/xlsx if faculty page was requested
-    for u in pending:
-        if "teknologjise-se-informacionit" in u or "/fti" in u:
-            for bonus in [
-                "https://uamd.edu.al/departamenti-i-teknologjise-se-informacionit/",
-                "https://uamd.edu.al/wp-content/uploads/2024/04/FTI.xlsx",
-            ]:
-                if bonus not in seen:
-                    seen.add(bonus)
-                    extra.append(bonus)
+    # If a faculty root is in the request, pull its full department graph + files
+    pending_joined = " ".join(pending)
+    for fac in FACULTIES:
+        fac_key = normalize_url(fac["url"]).rstrip("/")
+        if fac_key in pending_joined or any(fac_key in normalize_url(p) for p in pending):
+            for dep in fac.get("departments") or []:
+                dep = normalize_url(dep)
+                if dep not in seen:
+                    seen.add(dep)
+                    extra.append(dep)
+            for f in fac.get("files") or []:
+                f = normalize_url(f)
+                if f not in seen:
+                    seen.add(f)
+                    extra.append(f)
 
-    extra = extra[: max(0, (max_docs + 3) - len(results))]
+    extra = extra[: max(0, 10)]
     if extra:
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(extra))) as pool:
             for fut in as_completed({pool.submit(fetch_url, u): u for u in extra}):
@@ -430,9 +443,15 @@ def fetch_many(
                 if doc.get("ok") and doc.get("text"):
                     results.append(doc)
 
+    # Deduplicate by URL
+    uniq: dict[str, dict[str, Any]] = {}
+    for doc in results:
+        uniq[normalize_url(doc["url"])] = doc
+    results = list(uniq.values())
+
     order = {u: i for i, u in enumerate(pending + extra)}
     results.sort(key=lambda d: order.get(normalize_url(d["url"]), 999))
-    return results[: max(max_docs, min(len(results), max_docs + 2))]
+    return results[: max(max_docs, min(len(results), max_docs + 4))]
 
 
 def content_hash(text: str) -> str:

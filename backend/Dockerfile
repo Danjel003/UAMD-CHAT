@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements-prod.txt .
 RUN pip install --no-cache-dir -r requirements-prod.txt
 
-COPY app.py rag_engine.py scraper.py search_engine.py ./
+COPY app.py rag_engine.py scraper.py search_engine.py uamd_map.py ./
 
 EXPOSE 10000
 

@@ -26,12 +26,13 @@ CACHE_FOLDER = Path(os.getenv("CACHE_FOLDER", BASE_DIR / "cache"))
 EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "local").lower()  # local | openai
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-TOP_K = int(os.getenv("TOP_K", "5"))
+TOP_K = int(os.getenv("TOP_K", "8"))
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "700"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "80"))
-MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "4"))
-MAX_TOTAL_CHUNKS = int(os.getenv("MAX_TOTAL_CHUNKS", "16"))
-MIN_SCORE = float(os.getenv("MIN_RELEVANCE_SCORE", "0.12"))
+MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "5"))
+MAX_TOTAL_CHUNKS = int(os.getenv("MAX_TOTAL_CHUNKS", "28"))
+MIN_SCORE = float(os.getenv("MIN_RELEVANCE_SCORE", "0.10"))
+MAX_DOCS = int(os.getenv("MAX_DOCS", "10"))
 
 NO_ANSWER = (
     "Nuk gjeta një përgjigje të saktë në faqen zyrtare të Universitetit "
@@ -87,7 +88,23 @@ def looks_out_of_scope(question: str) -> bool:
 
 def wants_pdfs(question: str) -> bool:
     q = question.lower()
-    return any(k in q for k in ("pdf", "dokument", "rregullore", "statut", "vendim", "udhëzim", "udhezim"))
+    return any(
+        k in q
+        for k in (
+            "pdf",
+            "dokument",
+            "rregullore",
+            "statut",
+            "vendim",
+            "udhëzim",
+            "udhezim",
+            "program",
+            "programe",
+            "kuota",
+            "excel",
+            "tabel",
+        )
+    )
 
 
 def simple_split(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
@@ -345,17 +362,16 @@ class RAGEngine:
             if cached["answer"] != NO_ANSWER or cached.get("sources"):
                 return {"answer": cached["answer"], "sources": cached["sources"], "cached": True}
 
-        # 1) Search only within uamd.edu.al
-        search_hits = search_uamd(question, max_results=TOP_K)
+        # 1) Deep search within uamd.edu.al (+ official admissions portal)
+        search_hits = search_uamd(question, max_results=max(TOP_K, 8))
         if not search_hits:
             return {"answer": NO_ANSWER, "sources": []}
 
         urls = [h["url"] for h in search_hits]
 
-        # 2) Parallel scrape (PDF enrichment only when needed)
-        docs = fetch_many(urls, max_docs=TOP_K, include_pdfs=wants_pdfs(question))
+        # 2) Parallel deep scrape (faculty → departments → files)
+        docs = fetch_many(urls, max_docs=MAX_DOCS, include_pdfs=wants_pdfs(question))
         if not docs:
-            # Still allow title-only answer path from search hits when useful
             title_contexts = [
                 {
                     "title": h.get("title") or "UAMD",
@@ -371,10 +387,10 @@ class RAGEngine:
             answer = self._generate(question, title_contexts, search_hits=search_hits)
             return {"answer": answer, "sources": urls}
 
-        # 3) Chunk + in-memory semantic re-rank (no Chroma write per query)
+        # 3) Chunk + in-memory semantic re-rank
         chunks = self._chunk_documents(docs)
-        ranked = self._semantic_rerank(question, chunks, top_k=TOP_K)
-        relevant = [c for c in ranked if c.get("score", 0) >= MIN_SCORE] or ranked[: min(3, len(ranked))]
+        ranked = self._semantic_rerank(question, chunks, top_k=max(TOP_K, 8))
+        relevant = [c for c in ranked if c.get("score", 0) >= MIN_SCORE] or ranked[: min(5, len(ranked))]
 
         if not relevant:
             return {"answer": NO_ANSWER, "sources": [d["url"] for d in docs]}
@@ -390,13 +406,12 @@ class RAGEngine:
             if d["url"] not in sources:
                 sources.append(d["url"])
 
-        result = {"answer": answer, "sources": sources[:TOP_K]}
-        # Cache successful answers (and useful NO_ANSWER with sources) briefly
+        result = {"answer": answer, "sources": sources[:8]}
         if answer != NO_ANSWER:
             self._query_cache[cache_key] = {**result, "ts": time.time()}
 
         elapsed = time.time() - started
-        print(f"[rag] answered in {elapsed:.2f}s | sources={len(result['sources'])}")
+        print(f"[rag] answered in {elapsed:.2f}s | docs={len(docs)} chunks={len(chunks)} sources={len(result['sources'])}")
         return result
 
 
