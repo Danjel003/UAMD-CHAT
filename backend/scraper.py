@@ -26,12 +26,12 @@ USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
-REQUEST_TIMEOUT = 12
-MAX_HTML_CHARS = 22_000
-MAX_PDF_CHARS = 24_000
-MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
-PAGE_CACHE_TTL = 1800  # 30 minutes
-MAX_WORKERS = 5
+REQUEST_TIMEOUT = 8
+MAX_HTML_CHARS = 14_000
+MAX_PDF_CHARS = 16_000
+MAX_DOWNLOAD_BYTES = 5 * 1024 * 1024
+PAGE_CACHE_TTL = 3600  # 1 hour
+MAX_WORKERS = 8
 
 _page_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _cache_lock = threading.Lock()
@@ -378,10 +378,11 @@ def fetch_url(url: str, use_cache: bool = True) -> dict[str, Any]:
 
 def fetch_many(
     urls: list[str],
-    max_docs: int = 8,
+    max_docs: int = 6,
     include_pdfs: bool = False,
+    expand_faculty: bool = False,
 ) -> list[dict[str, Any]]:
-    """Fetch unique official URLs in parallel, then enrich with departments/files."""
+    """Fetch unique official URLs in parallel (optional faculty expansion)."""
     from uamd_map import FACULTIES
 
     pending: list[str] = []
@@ -406,36 +407,39 @@ def fetch_many(
                 results.append(doc)
 
     extra: list[str] = []
-    for doc in list(results):
-        for link in (doc.get("child_links") or []) + (doc.get("file_links") or []):
-            link = normalize_url(link)
-            if link not in seen and is_allowed_url(link):
-                seen.add(link)
-                extra.append(link)
-        if include_pdfs:
-            for pdf in doc.get("pdf_links") or []:
-                pdf = normalize_url(pdf)
-                if pdf not in seen and is_allowed_url(pdf):
-                    seen.add(pdf)
-                    extra.append(pdf)
+    # Only follow a few child/file links when explicitly needed (program questions)
+    if expand_faculty or include_pdfs:
+        for doc in list(results):
+            for link in (doc.get("file_links") or [])[:2]:
+                link = normalize_url(link)
+                if link not in seen and is_allowed_url(link):
+                    seen.add(link)
+                    extra.append(link)
+            if include_pdfs:
+                for pdf in (doc.get("pdf_links") or [])[:2]:
+                    pdf = normalize_url(pdf)
+                    if pdf not in seen and is_allowed_url(pdf):
+                        seen.add(pdf)
+                        extra.append(pdf)
 
-    # If a faculty root is in the request, pull its full department graph + files
-    pending_joined = " ".join(pending)
-    for fac in FACULTIES:
-        fac_key = normalize_url(fac["url"]).rstrip("/")
-        if fac_key in pending_joined or any(fac_key in normalize_url(p) for p in pending):
-            for dep in fac.get("departments") or []:
-                dep = normalize_url(dep)
-                if dep not in seen:
-                    seen.add(dep)
-                    extra.append(dep)
-            for f in fac.get("files") or []:
-                f = normalize_url(f)
-                if f not in seen:
-                    seen.add(f)
-                    extra.append(f)
+        if expand_faculty:
+            pending_joined = " ".join(pending)
+            for fac in FACULTIES:
+                fac_key = normalize_url(fac["url"]).rstrip("/")
+                if fac_key in pending_joined or any(fac_key == normalize_url(p).rstrip("/") for p in pending):
+                    for f in (fac.get("files") or [])[:1]:
+                        f = normalize_url(f)
+                        if f not in seen:
+                            seen.add(f)
+                            extra.append(f)
+                    # At most 2 departments per matched faculty (not full graph)
+                    for dep in (fac.get("departments") or [])[:2]:
+                        dep = normalize_url(dep)
+                        if dep not in seen:
+                            seen.add(dep)
+                            extra.append(dep)
 
-    extra = extra[: max(0, 10)]
+    extra = extra[: max(0, 4)]
     if extra:
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(extra))) as pool:
             for fut in as_completed({pool.submit(fetch_url, u): u for u in extra}):
@@ -451,7 +455,7 @@ def fetch_many(
 
     order = {u: i for i, u in enumerate(pending + extra)}
     results.sort(key=lambda d: order.get(normalize_url(d["url"]), 999))
-    return results[: max(max_docs, min(len(results), max_docs + 4))]
+    return results[:max_docs]
 
 
 def content_hash(text: str) -> str:

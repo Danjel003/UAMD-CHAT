@@ -272,7 +272,7 @@ def search_duckduckgo(query: str, max_results: int = MAX_RESULTS) -> list[dict[s
         url = f"https://html.duckduckgo.com/html/?q={q}"
         resp = requests.get(
             url,
-            timeout=20,
+            timeout=8,
             headers={
                 "User-Agent": USER_AGENT,
                 "Accept": "text/html,application/xhtml+xml",
@@ -281,7 +281,7 @@ def search_duckduckgo(query: str, max_results: int = MAX_RESULTS) -> list[dict[s
         if resp.status_code >= 400 or "result__a" not in resp.text:
             resp = requests.get(
                 f"https://lite.duckduckgo.com/lite/?q={q}",
-                timeout=20,
+                timeout=8,
                 headers={"User-Agent": USER_AGENT},
             )
         resp.raise_for_status()
@@ -338,7 +338,7 @@ def wp_site_search(query: str, max_results: int = MAX_RESULTS) -> list[dict[str,
 
     try:
         api = f"https://uamd.edu.al/wp-json/wp/v2/search?search={quote_plus(search_q)}&per_page={max_results}"
-        resp = requests.get(api, timeout=12, headers={"User-Agent": USER_AGENT})
+        resp = requests.get(api, timeout=5, headers={"User-Agent": USER_AGENT})
         if resp.status_code < 400:
             for row in resp.json() or []:
                 href = row.get("url")
@@ -358,9 +358,13 @@ def wp_site_search(query: str, max_results: int = MAX_RESULTS) -> list[dict[str,
     except Exception as exc:
         print(f"[search] WP REST error: {exc}")
 
+    # Skip slow HTML ?s= parse when REST already returned results
+    if results:
+        return _dedupe(results, max_results)
+
     try:
         url = f"https://uamd.edu.al/?s={quote_plus(search_q)}"
-        resp = requests.get(url, timeout=15, headers={"User-Agent": USER_AGENT})
+        resp = requests.get(url, timeout=6, headers={"User-Agent": USER_AGENT})
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
         for a in soup.select(
@@ -441,18 +445,17 @@ def crawl_uamd_site(query: str, max_results: int = MAX_RESULTS) -> list[dict[str
 
 def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, Any]]:
     """
-    Deep hybrid search on uamd.edu.al:
-    query-specific (deep/intent/WP) first, then hubs, then APIs/crawl/DDG.
+    Fast hybrid search on uamd.edu.al.
+    Prefer instant deep/intent hits; only call slow web providers when needed.
     """
     query = (query or "").strip()
     if not query:
         return []
 
-    limit = max(max_results, 14)
+    limit = min(max(max_results, 8), 10)
     specific: list[dict[str, Any]] = []
-    fallback: list[dict[str, Any]] = []
+    fallback = [_as_hit(h["url"], h["title"], provider="hub") for h in ALWAYS_HUBS[:5]]
 
-    # 1) Query-specific expansion
     deep_hits = [
         _as_hit(item["url"], item.get("title", ""), provider="deep")
         for item in deep_urls_for_question(query, limit=limit)
@@ -466,19 +469,30 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
         print(f"[search] intent seeds → {len(intent_hits)}")
         specific.extend(intent_hits)
 
-    wp_hits: list[dict[str, Any]] = []
+    strong = _dedupe(specific, limit)
+    # Fast path: enough curated URLs → skip WP/DDG/crawl (biggest latency win)
+    if len(strong) >= 4 and (deep_hits or intent_hits):
+        results = _dedupe(strong + fallback, limit)
+        print(f"[search] fast-path → {len(results)} urls")
+        return results
+
+    # Medium path: WP REST only (skip HTML theme parse), short timeout via requests
     try:
-        wp_hits = wp_site_search(query, max_results=limit)
+        wp_hits = wp_site_search(query, max_results=min(6, limit))
         if wp_hits:
             print(f"[search] wp_site_search → {len(wp_hits)}")
             specific.extend(wp_hits)
     except Exception as exc:
         print(f"[search] wp_site_search failed: {exc}")
 
-    # 2) Always-available official hubs (after specific hits so they don't crowd them out)
-    fallback.extend(_as_hit(h["url"], h["title"], provider="hub") for h in ALWAYS_HUBS)
+    strong = _dedupe(specific, limit)
+    if len(strong) >= 4:
+        results = _dedupe(strong + fallback, limit)
+        print(f"[search] mid-path → {len(results)} urls")
+        return results
 
-    for provider in (search_tavily, search_serpapi, crawl_uamd_site, search_duckduckgo):
+    # Slow path only when thin: crawl home links, then optional APIs/DDG
+    for provider in (crawl_uamd_site, search_tavily, search_serpapi, search_duckduckgo):
         try:
             hits = provider(query, max_results=limit)
         except Exception as exc:

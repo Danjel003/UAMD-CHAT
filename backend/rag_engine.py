@@ -26,13 +26,15 @@ CACHE_FOLDER = Path(os.getenv("CACHE_FOLDER", BASE_DIR / "cache"))
 EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "local").lower()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-TOP_K = int(os.getenv("TOP_K", "10"))
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "700"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "80"))
-MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "6"))
-MAX_TOTAL_CHUNKS = int(os.getenv("MAX_TOTAL_CHUNKS", "36"))
+TOP_K = int(os.getenv("TOP_K", "5"))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "600"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "60"))
+MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "3"))
+MAX_TOTAL_CHUNKS = int(os.getenv("MAX_TOTAL_CHUNKS", "15"))
 MIN_SCORE = float(os.getenv("MIN_RELEVANCE_SCORE", "0.05"))
-MAX_DOCS = int(os.getenv("MAX_DOCS", "12"))
+MAX_DOCS = int(os.getenv("MAX_DOCS", "5"))
+USE_EMBEDDINGS = os.getenv("USE_EMBEDDINGS", "auto").lower()  # auto|always|never
+
 
 NO_ANSWER = (
     "Nuk gjeta një përgjigje të saktë në faqen zyrtare të Universitetit "
@@ -129,7 +131,7 @@ class RAGEngine:
         self._openai = None
         self._ready = False
         self._query_cache: dict[str, dict[str, Any]] = {}
-        self._cache_ttl = int(os.getenv("QUERY_CACHE_TTL", "600"))
+        self._cache_ttl = int(os.getenv("QUERY_CACHE_TTL", "1800"))
         self._embed_cache: dict[str, np.ndarray] = {}
         self._embed_cache_lock = threading.Lock()
 
@@ -232,18 +234,33 @@ class RAGEngine:
     def _semantic_rerank(self, question: str, chunks: list[dict[str, Any]], top_k: int = TOP_K) -> list[dict[str, Any]]:
         if not chunks:
             return []
-        q_vec = self._embed([question])[0]
-        doc_vecs = self._embed([c["content"] for c in chunks])
-        semantic = doc_vecs @ q_vec
-        hits: list[dict[str, Any]] = []
-        for i, chunk in enumerate(chunks):
+
+        # Fast keyword pre-rank (no API)
+        pre: list[dict[str, Any]] = []
+        for chunk in chunks:
             kw = _keyword_score(question, chunk["content"] + " " + (chunk.get("title") or ""))
-            score = 0.75 * float(semantic[i]) + 0.25 * kw
             item = dict(chunk)
-            item["score"] = score
-            hits.append(item)
-        hits.sort(key=lambda x: x["score"], reverse=True)
-        return hits[:top_k]
+            item["kw"] = kw
+            item["score"] = kw
+            pre.append(item)
+        pre.sort(key=lambda x: x["kw"], reverse=True)
+
+        mode = USE_EMBEDDINGS
+        strong_kw = pre and pre[0]["kw"] >= 0.35
+        use_emb = mode == "always" or (mode == "auto" and not strong_kw)
+
+        if not use_emb or mode == "never":
+            return pre[:top_k]
+
+        # Embed only the best keyword candidates (small, fast OpenAI call)
+        candidates = pre[: max(top_k + 4, 10)]
+        q_vec = self._embed([question])[0]
+        doc_vecs = self._embed([c["content"] for c in candidates])
+        for i, chunk in enumerate(candidates):
+            semantic = float(doc_vecs[i] @ q_vec)
+            chunk["score"] = 0.7 * semantic + 0.3 * float(chunk.get("kw") or 0)
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        return candidates[:top_k]
 
     def _fallback_from_docs(self, question: str, docs: list[dict[str, Any]], search_hits: list[dict[str, Any]]) -> str:
         """Constructive answer when model refuses or context is thin."""
@@ -288,15 +305,15 @@ class RAGEngine:
         pages_block = ""
         docs_for_list = source_docs or []
         if docs_for_list:
-            lines = [f"- {d.get('title') or 'Faqe UAMD'}: {d.get('url')}" for d in docs_for_list[:10]]
+            lines = [f"- {d.get('title') or 'Faqe UAMD'}: {d.get('url')}" for d in docs_for_list[:5]]
             pages_block = "Faqet zyrtare të gjetura:\n" + "\n".join(lines) + "\n\n"
         elif search_hits:
-            lines = [f"- {h.get('title') or 'UAMD'}: {h.get('url')}" for h in search_hits[:10]]
+            lines = [f"- {h.get('title') or 'UAMD'}: {h.get('url')}" for h in search_hits[:5]]
             pages_block = "Rezultatet e kërkimit:\n" + "\n".join(lines) + "\n\n"
 
         context_block = "\n\n".join(
-            f"[Burimi: {c.get('title') or 'UAMD'}] ({c.get('url')})\n{c.get('content')}"
-            for c in contexts
+            f"[Burimi: {c.get('title') or 'UAMD'}] ({c.get('url')})\n{(c.get('content') or '')[:900]}"
+            for c in contexts[:5]
         )
 
         user_prompt = (
@@ -314,7 +331,7 @@ class RAGEngine:
         response = self._openai.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             temperature=0,
-            max_tokens=420,
+            max_tokens=280,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -344,14 +361,24 @@ class RAGEngine:
             if "nuk gjeta një përgjigje" not in (cached.get("answer") or "").lower():
                 return {"answer": cached["answer"], "sources": cached["sources"], "cached": True}
 
-        search_hits = search_uamd(question, max_results=max(TOP_K, 12))
+        search_hits = search_uamd(question, max_results=max(TOP_K, 8))
         if not search_hits:
             search_hits = [
                 {"url": "https://uamd.edu.al/", "title": "UAMD", "snippet": "", "provider": "fallback"}
             ]
 
         urls = [h["url"] for h in search_hits]
-        docs = fetch_many(urls, max_docs=MAX_DOCS, include_pdfs=True)
+        need_pdfs = wants_pdfs(question)
+        expand = any(
+            k in question.lower()
+            for k in ("program", "programe", "bachelor", "master", "dega", "deget", "fakultet")
+        )
+        docs = fetch_many(
+            urls,
+            max_docs=MAX_DOCS,
+            include_pdfs=need_pdfs,
+            expand_faculty=expand,
+        )
 
         if not docs:
             answer = (
@@ -364,8 +391,8 @@ class RAGEngine:
             return {"answer": answer, "sources": urls[:5]}
 
         chunks = self._chunk_documents(docs)
-        ranked = self._semantic_rerank(question, chunks, top_k=max(TOP_K, 10))
-        relevant = ranked[: max(6, min(10, len(ranked)))]
+        ranked = self._semantic_rerank(question, chunks, top_k=TOP_K)
+        relevant = ranked[: min(TOP_K, len(ranked))]
 
         answer = self._generate(question, relevant, source_docs=docs, search_hits=search_hits)
 
