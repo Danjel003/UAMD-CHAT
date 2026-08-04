@@ -42,10 +42,7 @@ function prettyUrl(url) {
 
 function AnswerCard({ answer, sources }) {
   return (
-    <div
-      ref={(el) => el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
-      className="mt-6 animate-fade-in-up rounded-2xl border border-uamd-100 bg-white p-6 shadow-[0_20px_60px_-20px_rgba(6,20,40,0.45)] sm:p-8"
-    >
+    <div className="mt-6 animate-fade-in-up rounded-2xl border border-uamd-100 bg-white p-6 shadow-[0_20px_60px_-20px_rgba(6,20,40,0.45)] sm:p-8">
       <div className="mb-4 flex items-center gap-2">
         <Sparkles className="h-5 w-5 text-uamd-600" />
         <h2 className="font-display text-xl font-semibold text-uamd-900">Përgjigjja</h2>
@@ -96,10 +93,17 @@ export default function App() {
   const [sources, setSources] = useState([])
   const [error, setError] = useState(null)
   const textareaRef = useRef(null)
+  const answerRef = useRef(null)
 
   useEffect(() => {
     textareaRef.current?.focus()
   }, [])
+
+  // Scroll to answer only once when a new reply arrives — not on every keystroke
+  useEffect(() => {
+    if (!answer || loading) return
+    answerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [answer, loading])
 
   async function askQuestion() {
     const q = question.trim()
@@ -148,7 +152,7 @@ export default function App() {
   }
 
   return (
-    <div className="bg-mesh relative min-h-screen overflow-hidden">
+    <div className="bg-mesh relative min-h-screen overflow-x-hidden">
       <div className="grid-overlay pointer-events-none absolute inset-0" />
 
       <div className="relative z-10 mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-10 sm:px-6 sm:py-14">
@@ -206,7 +210,11 @@ export default function App() {
             </div>
           )}
 
-          {answer && !loading && <AnswerCard answer={answer} sources={sources} />}
+          {answer && !loading && (
+            <div ref={answerRef}>
+              <AnswerCard answer={answer} sources={sources} />
+            </div>
+          )}
         </main>
 
         <footer className="mt-12 text-center text-xs text-white/35">
