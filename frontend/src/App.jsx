@@ -1,3 +1,10 @@
+/*
+ * UAMD GPT — Chatbot for Universiteti "Aleksandër Moisiu" Durrës
+ * Copyright (c) 2026 Danjel Kalari. All rights reserved.
+ * Author: Danjel Kalari
+ * Product of: Drejtoria e IT / Sektori i Inovacionit dhe Software
+ */
+
 import { useEffect, useRef, useState } from 'react'
 import { Search, ExternalLink, ShieldCheck, Sparkles, Globe } from 'lucide-react'
 
@@ -217,8 +224,14 @@ export default function App() {
           )}
         </main>
 
-        <footer className="mt-12 text-center text-xs text-white/35">
-          © {new Date().getFullYear()} Universiteti “Aleksandër Moisiu” Durrës · UAMD GPT
+        <footer className="mt-12 space-y-2 text-center text-xs text-white/35">
+          <p>
+            © {new Date().getFullYear()} Universiteti “Aleksandër Moisiu” Durrës · UAMD GPT
+          </p>
+          <p>
+            Ky chatbot është në fazë testimi. Produkt i Drejtorisë së IT / Sektorit të Inovacionit dhe Software.
+          </p>
+          <p>© {new Date().getFullYear()} Danjel Kalari. Të gjitha të drejtat e rezervuara.</p>
         </footer>
       </div>
     </div>

@@ -2,6 +2,11 @@
 UAMD GPT — Flask API
 Live answers from uamd.edu.al only.
 Endpoints: POST /ask, GET /health
+
+Copyright (c) 2026 Danjel Kalari. All rights reserved.
+Author: Danjel Kalari
+Product of: Drejtoria e IT / Sektori i Inovacionit dhe Software
+Universiteti "Aleksandër Moisiu" Durrës
 """
 
 from __future__ import annotations

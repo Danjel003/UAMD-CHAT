@@ -1,6 +1,9 @@
 """
 UAMD GPT — Deep live RAG over uamd.edu.al.
 Always searches deeply and answers from official pages; avoids empty refusals.
+
+Copyright (c) 2026 Danjel Kalari. All rights reserved.
+Author: Danjel Kalari
 """
 
 from __future__ import annotations
