@@ -225,11 +225,10 @@ export default function App() {
         </main>
 
         <footer className="mt-12 space-y-2 text-center text-xs text-white/35">
+          <p>Ky chatbot është aktualisht në fazë testimi dhe zhvillimi.</p>
+          <p>Zhvilluar nga Drejtoria e IT-së, Sektori i Inovacionit dhe Software-it.</p>
           <p>
-            © {new Date().getFullYear()} Universiteti “Aleksandër Moisiu” Durrës · UAMD GPT
-          </p>
-          <p>
-            Ky chatbot është në fazë testimi. Produkt i Drejtorisë së IT / Sektorit të Inovacionit dhe Software.
+            © {new Date().getFullYear()} Universiteti “Aleksandër Moisiu” Durrës (UAMD) · UAMD GPT
           </p>
           <p>© {new Date().getFullYear()} Danjel Kalari. Të gjitha të drejtat e rezervuara.</p>
         </footer>
