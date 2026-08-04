@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-from rag_engine import NO_ANSWER, get_engine
+from rag_engine import get_engine
 
 load_dotenv()
 
@@ -95,7 +95,16 @@ def ask():
                     "error": str(exc),
                 }
             ), 429
-        return jsonify({"answer": NO_ANSWER, "sources": [], "error": str(exc)}), 500
+        return jsonify(
+            {
+                "answer": (
+                    "Ndodhi një gabim teknik gjatë kërkimit. "
+                    "Provo përsëri, ose vizito https://uamd.edu.al/ / kontakto info@uamd.edu.al."
+                ),
+                "sources": ["https://uamd.edu.al/"],
+                "error": str(exc),
+            }
+        ), 500
 
 
 def warm_up():

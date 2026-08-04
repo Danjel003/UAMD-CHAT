@@ -1,6 +1,6 @@
 """
-UAMD GPT — Fast live RAG over uamd.edu.al.
-Search → parallel scrape → in-memory semantic rank → GPT-4o-mini.
+UAMD GPT — Deep live RAG over uamd.edu.al.
+Always searches deeply and answers from official pages; avoids empty refusals.
 """
 
 from __future__ import annotations
@@ -23,16 +23,16 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_FOLDER = Path(os.getenv("CACHE_FOLDER", BASE_DIR / "cache"))
-EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "local").lower()  # local | openai
+EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "local").lower()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-TOP_K = int(os.getenv("TOP_K", "8"))
+TOP_K = int(os.getenv("TOP_K", "10"))
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "700"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "80"))
-MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "5"))
-MAX_TOTAL_CHUNKS = int(os.getenv("MAX_TOTAL_CHUNKS", "28"))
-MIN_SCORE = float(os.getenv("MIN_RELEVANCE_SCORE", "0.10"))
-MAX_DOCS = int(os.getenv("MAX_DOCS", "10"))
+MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "6"))
+MAX_TOTAL_CHUNKS = int(os.getenv("MAX_TOTAL_CHUNKS", "36"))
+MIN_SCORE = float(os.getenv("MIN_RELEVANCE_SCORE", "0.05"))
+MAX_DOCS = int(os.getenv("MAX_DOCS", "12"))
 
 NO_ANSWER = (
     "Nuk gjeta një përgjigje të saktë në faqen zyrtare të Universitetit "
@@ -41,18 +41,19 @@ NO_ANSWER = (
 
 SYSTEM_PROMPT = (
     "Ti je UAMD GPT, asistenti zyrtar informues i Universitetit 'Aleksandër Moisiu' Durrës. "
-    "Përgjigju duke përdorur informacionin nga konteksti i faqeve zyrtare. "
-    "Jep përgjigje konkrete, të shkurtra dhe të dobishme. "
-    "Nëse konteksti ka informacion të pjesshëm, jep atë që dihet qartë (p.sh. vendndodhja Durrës, "
-    "lista e fakulteteve, email-i info@uamd.edu.al, linku i Admissions) dhe shto linkun zyrtar. "
-    "Mos thuaj 'nuk gjeta' nëse konteksti përmban fakte të dobishme. "
-    "Mos shpik të dhëna që nuk janë në kontekst."
+    "Detyra jote: jep GJITHMONË një përgjigje të dobishme duke u bazuar në konteksting e faqeve zyrtare. "
+    "Rregulla:\n"
+    "1) Përdor vetëm informacionin e kontekstit (uamd.edu.al / admissions).\n"
+    "2) Nëse nuk ke numrin/datën e saktë, jep informacionin më të afërt që ke + linkun zyrtar ku të vazhdohet.\n"
+    "3) MOS thuaj 'Nuk gjeta një përgjigje…' kur ke të paktën një fakt, listë, email, emër, link ose udhëzim.\n"
+    "4) Përgjigje të shkurtra, konkrete, në shqip.\n"
+    "5) Mos shpik fakte që nuk janë në kontekst."
 )
 
 OUT_OF_SCOPE = (
-    "UAMD GPT shërben vetëm për informacione zyrtare të Universitetit "
-    "'Aleksandër Moisiu' Durrës (uamd.edu.al). Ju lutem bëni një pyetje që lidhet "
-    "me universitetin, programet, pranimet, rregulloret ose shërbimet e tij."
+    "UAMD GPT shërben për informacione të Universitetit 'Aleksandër Moisiu' Durrës. "
+    "Mund të pyesësh për fakultete, programe, pranime, orare, kontakt, rregullore, etj. "
+    "Për fillim: https://uamd.edu.al/"
 )
 
 _lock = threading.Lock()
@@ -60,30 +61,20 @@ _engine: "RAGEngine | None" = None
 
 
 def looks_out_of_scope(question: str) -> bool:
+    """Very strict: only reject clearly non-university chatter."""
     q = question.lower().strip()
     if len(q) < 2:
         return True
-
-    signals = [
-        "uamd", "universitet", "fakultet", "student", "master", "bachelor",
-        "bakalaureat", "program", "kurs", "lënd", "lend", "provim", "regjistr",
-        "pranim", "aplikim", "tarif", "burs", "diplom", "semest", "bibliotek",
-        "kampus", "durrës", "durres", "moisiu", "aleksandër", "aleksander",
-        "rregullore", "statut", "pedagog", "profesor", "sekretari", "kontak",
-        "afat", "kredit", "ects", "dega", "orari", "viti akademik", "kuota",
-        "transfer", "dekan", "doktoratur", "praktik", "dokument", "pdf",
-    ]
-    if any(s in q for s in signals):
-        return False
-
     off = [
-        "si je", "hello", "hi ", "moti", "football", "futboll", "bitcoin",
-        "recetë", "recete", "shaka", "joke", "chatgpt", "poezi", "politikë",
+        "si je", "hello", "hi ", "hey", "moti", "football", "futboll", "bitcoin",
+        "recetë", "recete", "shaka", "joke", "poezi", "kush fitoi", "horoskop",
     ]
     if any(p in q for p in off):
+        # still allow if university mentioned
+        if any(k in q for k in ("uamd", "universitet", "moisiu", "fakultet", "student")):
+            return False
         return True
-
-    return bool(re.search(r"\b(kryeqyteti i|who was|how to cook|shkruaj kod)\b", q))
+    return False
 
 
 def wants_pdfs(question: str) -> bool:
@@ -91,36 +82,23 @@ def wants_pdfs(question: str) -> bool:
     return any(
         k in q
         for k in (
-            "pdf",
-            "dokument",
-            "rregullore",
-            "statut",
-            "vendim",
-            "udhëzim",
-            "udhezim",
-            "program",
-            "programe",
-            "kuota",
-            "excel",
-            "tabel",
+            "pdf", "dokument", "rregullore", "statut", "vendim", "udhëzim", "udhezim",
+            "program", "programe", "kuota", "excel", "tabel", "tarif", "orar",
         )
     )
 
 
 def simple_split(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
-    """Lightweight splitter (no LangChain dependency — better for cloud hosting)."""
     text = (text or "").strip()
     if not text:
         return []
     if len(text) <= chunk_size:
         return [text]
-
     parts: list[str] = []
     start = 0
     n = len(text)
     while start < n:
         end = min(start + chunk_size, n)
-        # Prefer breaking on paragraph/sentence
         if end < n:
             window = text[start:end]
             break_at = max(window.rfind("\n\n"), window.rfind(". "), window.rfind("\n"))
@@ -135,6 +113,15 @@ def simple_split(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_O
     return parts
 
 
+def _keyword_score(question: str, text: str) -> float:
+    q_tokens = [t for t in re.findall(r"[a-zçë0-9]{3,}", question.lower()) if t not in {"the", "and", "per", "nga", "nje", "një"}]
+    if not q_tokens:
+        return 0.0
+    hay = text.lower()
+    hits = sum(1 for t in q_tokens if t in hay)
+    return hits / max(len(q_tokens), 1)
+
+
 class RAGEngine:
     def __init__(self) -> None:
         self._embedding_model = None
@@ -142,7 +129,7 @@ class RAGEngine:
         self._openai = None
         self._ready = False
         self._query_cache: dict[str, dict[str, Any]] = {}
-        self._cache_ttl = int(os.getenv("QUERY_CACHE_TTL", "900"))
+        self._cache_ttl = int(os.getenv("QUERY_CACHE_TTL", "600"))
         self._embed_cache: dict[str, np.ndarray] = {}
         self._embed_cache_lock = threading.Lock()
 
@@ -150,34 +137,28 @@ class RAGEngine:
         with _lock:
             if self._ready:
                 return
-
             self._openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             backend = os.getenv("EMBEDDING_BACKEND", EMBEDDING_BACKEND).lower()
             self._embedding_backend = backend
-
             if backend == "openai":
                 print("[rag] Using OpenAI embeddings (production/light mode)...")
-                # tiny warm-up call skipped to save tokens; first request warms naturally
             else:
-                print("[rag] Loading local embedding model BAAI/bge-m3...")
+                print("[rag] Loading local embedding model...")
                 from sentence_transformers import SentenceTransformer
 
                 cache_dir = str(CACHE_FOLDER / "embeddings")
                 Path(cache_dir).mkdir(parents=True, exist_ok=True)
                 self._embedding_model = SentenceTransformer(
-                    EMBEDDING_MODEL,
-                    cache_folder=cache_dir,
-                    trust_remote_code=True,
+                    EMBEDDING_MODEL, cache_folder=cache_dir, trust_remote_code=True
                 )
                 self._embedding_model.encode(["uamd warmup"], normalize_embeddings=True)
-
             self._ready = True
             print(f"[rag] Ready (backend={self._embedding_backend}).")
 
     def _chunk_documents(self, docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         chunks: list[dict[str, Any]] = []
         for doc in docs:
-            lead = f"{doc.get('title') or ''}\n{doc.get('url') or ''}\n{(doc.get('text') or '')[:500]}".strip()
+            lead = f"{doc.get('title') or ''}\n{doc.get('url') or ''}\n{(doc.get('text') or '')[:700]}".strip()
             if len(lead) >= 40:
                 chunks.append(
                     {
@@ -187,12 +168,11 @@ class RAGEngine:
                         "title": doc.get("title") or doc["url"],
                     }
                 )
-
             pieces = simple_split(doc["text"])
             kept = 0
             for i, content in enumerate(pieces):
                 content = content.strip()
-                if len(content) < 50:
+                if len(content) < 40:
                     continue
                 chunks.append(
                     {
@@ -210,29 +190,19 @@ class RAGEngine:
         return chunks[:MAX_TOTAL_CHUNKS]
 
     def _encode_openai(self, texts: list[str]) -> np.ndarray:
-        # OpenAI embedding API accepts batches; keep batches modest
         out: list[list[float]] = []
-        batch_size = 64
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
-            resp = self._openai.embeddings.create(
-                model=OPENAI_EMBEDDING_MODEL,
-                input=batch,
-            )
-            # Ensure order by index
-            sorted_data = sorted(resp.data, key=lambda x: x.index)
-            for row in sorted_data:
+        for i in range(0, len(texts), 64):
+            batch = texts[i : i + 64]
+            resp = self._openai.embeddings.create(model=OPENAI_EMBEDDING_MODEL, input=batch)
+            for row in sorted(resp.data, key=lambda x: x.index):
                 vec = np.asarray(row.embedding, dtype=np.float32)
-                norm = np.linalg.norm(vec) + 1e-12
-                out.append((vec / norm).tolist())
+                out.append((vec / (np.linalg.norm(vec) + 1e-12)).tolist())
         return np.asarray(out, dtype=np.float32)
 
     def _embed(self, texts: list[str]) -> np.ndarray:
-        """Embed texts with small hash cache for repeated chunks."""
         vectors: list[np.ndarray | None] = [None] * len(texts)
         missing_idx: list[int] = []
         missing_texts: list[str] = []
-
         with self._embed_cache_lock:
             for i, t in enumerate(texts):
                 key = content_hash(t)
@@ -242,49 +212,62 @@ class RAGEngine:
                 else:
                     missing_idx.append(i)
                     missing_texts.append(t)
-
         if missing_texts:
             if self._embedding_backend == "openai":
                 encoded = self._encode_openai(missing_texts)
             else:
                 encoded = self._embedding_model.encode(
-                    missing_texts,
-                    batch_size=32,
-                    show_progress_bar=False,
-                    normalize_embeddings=True,
+                    missing_texts, batch_size=32, show_progress_bar=False, normalize_embeddings=True
                 )
             with self._embed_cache_lock:
                 for i, vec in zip(missing_idx, encoded):
                     arr = np.asarray(vec, dtype=np.float32)
                     vectors[i] = arr
                     self._embed_cache[content_hash(texts[i])] = arr
-                    if len(self._embed_cache) > 4000:
-                        for k in list(self._embed_cache.keys())[:800]:
+                    if len(self._embed_cache) > 5000:
+                        for k in list(self._embed_cache.keys())[:1000]:
                             self._embed_cache.pop(k, None)
-
         return np.vstack(vectors)
 
-    def _semantic_rerank(
-        self,
-        question: str,
-        chunks: list[dict[str, Any]],
-        top_k: int = TOP_K,
-    ) -> list[dict[str, Any]]:
+    def _semantic_rerank(self, question: str, chunks: list[dict[str, Any]], top_k: int = TOP_K) -> list[dict[str, Any]]:
         if not chunks:
             return []
-
         q_vec = self._embed([question])[0]
         doc_vecs = self._embed([c["content"] for c in chunks])
-        # Cosine similarity since vectors are normalized → dot product
-        scores = doc_vecs @ q_vec
-
-        ranked_idx = np.argsort(-scores)[:top_k]
+        semantic = doc_vecs @ q_vec
         hits: list[dict[str, Any]] = []
-        for i in ranked_idx:
-            item = dict(chunks[int(i)])
-            item["score"] = float(scores[int(i)])
+        for i, chunk in enumerate(chunks):
+            kw = _keyword_score(question, chunk["content"] + " " + (chunk.get("title") or ""))
+            score = 0.75 * float(semantic[i]) + 0.25 * kw
+            item = dict(chunk)
+            item["score"] = score
             hits.append(item)
-        return hits
+        hits.sort(key=lambda x: x["score"], reverse=True)
+        return hits[:top_k]
+
+    def _fallback_from_docs(self, question: str, docs: list[dict[str, Any]], search_hits: list[dict[str, Any]]) -> str:
+        """Constructive answer when model refuses or context is thin."""
+        links = []
+        for d in docs[:5]:
+            title = d.get("title") or "Faqe UAMD"
+            links.append(f"- {title}: {d.get('url')}")
+        if not links:
+            for h in search_hits[:5]:
+                links.append(f"- {h.get('title') or 'UAMD'}: {h.get('url')}")
+        snippet = ""
+        for d in docs:
+            text = (d.get("text") or "").strip()
+            if len(text) > 120:
+                snippet = text[:280].replace("\n", " ")
+                break
+        body = (
+            f"Bazuar në faqet zyrtare të UAMD, ja informacioni më i afërt për pyetjen tënde.\n"
+        )
+        if snippet:
+            body += f"\n{snippet}...\n"
+        body += "\nMund të kontrollosh këto burime zyrtare:\n" + "\n".join(links)
+        body += "\n\nKontakt: info@uamd.edu.al | https://uamd.edu.al/"
+        return body
 
     def _generate(
         self,
@@ -298,21 +281,18 @@ class RAGEngine:
 
         api_key = os.getenv("OPENAI_API_KEY", "")
         if not api_key or api_key.startswith("sk-your"):
-            raise RuntimeError(
-                "Incorrect API key provided: OPENAI_API_KEY is missing or placeholder."
-            )
+            raise RuntimeError("Incorrect API key provided: OPENAI_API_KEY is missing or placeholder.")
 
-        # Keep client key in sync if .env changed without full process issues
         self._openai = OpenAI(api_key=api_key)
 
         pages_block = ""
         docs_for_list = source_docs or []
         if docs_for_list:
-            lines = [f"- {d.get('title') or 'Faqe UAMD'}: {d.get('url')}" for d in docs_for_list]
+            lines = [f"- {d.get('title') or 'Faqe UAMD'}: {d.get('url')}" for d in docs_for_list[:10]]
             pages_block = "Faqet zyrtare të gjetura:\n" + "\n".join(lines) + "\n\n"
         elif search_hits:
-            lines = [f"- {h.get('title') or 'UAMD'}: {h.get('url')}" for h in search_hits]
-            pages_block = "Rezultatet e kërkimit në uamd.edu.al:\n" + "\n".join(lines) + "\n\n"
+            lines = [f"- {h.get('title') or 'UAMD'}: {h.get('url')}" for h in search_hits[:10]]
+            pages_block = "Rezultatet e kërkimit:\n" + "\n".join(lines) + "\n\n"
 
         context_block = "\n\n".join(
             f"[Burimi: {c.get('title') or 'UAMD'}] ({c.get('url')})\n{c.get('content')}"
@@ -321,27 +301,29 @@ class RAGEngine:
 
         user_prompt = (
             f"{pages_block}"
-            f"Ekstrakte nga burimet zyrtare të UAMD:\n\n{context_block}\n\n"
+            f"Ekstrakte nga burimet zyrtare:\n\n{context_block}\n\n"
             f"Pyetja: {question}\n\n"
-            "Udhëzime:\n"
-            "- Përgjigju me fakte nga konteksti/titujt/linket më sipër.\n"
-            "- Jep përgjigje konkrete (lista, email, linku i aplikimit, etj.) kur janë të disponueshme.\n"
-            "- Nëse informacioni është i pjesshëm, jep pjesën e saktë + ku të vazhdohet (link zyrtar).\n"
-            "- Përgjigje e shkurtër (maks. 5 fjali ose bullets).\n"
-            f"- Vetëm nëse konteksti është plotësisht i parëndësishëm: {NO_ANSWER}"
+            "Udhëzime të detyrueshme:\n"
+            "- Jep gjithmonë një përgjigje të dobishme në shqip.\n"
+            "- Nxirr sa më shumë fakte relevante nga konteksti.\n"
+            "- Nëse mungon një detaj, thuaj çfarë dihet dhe jep linkun më të mirë zyrtar.\n"
+            "- MOS përdor frazën 'Nuk gjeta një përgjigje të saktë'.\n"
+            "- Maksimumi 6 fjali ose lista e shkurtër."
         )
 
         response = self._openai.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             temperature=0,
-            max_tokens=350,
+            max_tokens=420,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
         )
         answer = (response.choices[0].message.content or "").strip()
-        return answer or NO_ANSWER
+        if (not answer) or ("nuk gjeta një përgjigje" in answer.lower()):
+            return self._fallback_from_docs(question, docs_for_list or [], search_hits or [])
+        return answer
 
     def ask(self, question: str) -> dict[str, Any]:
         started = time.time()
@@ -353,49 +335,38 @@ class RAGEngine:
             return {"answer": "Ju lutem shkruani një pyetje.", "sources": []}
 
         if looks_out_of_scope(question):
-            return {"answer": OUT_OF_SCOPE, "sources": []}
+            return {"answer": OUT_OF_SCOPE, "sources": ["https://uamd.edu.al/"]}
 
         cache_key = re.sub(r"\s+", " ", question.lower()).strip()
         cached = self._query_cache.get(cache_key)
         if cached and time.time() - cached["ts"] < self._cache_ttl:
-            # Never serve stale hard failures forever if they were NO_ANSWER without sources
-            if cached["answer"] != NO_ANSWER or cached.get("sources"):
+            # Never serve stale refusal answers
+            if "nuk gjeta një përgjigje" not in (cached.get("answer") or "").lower():
                 return {"answer": cached["answer"], "sources": cached["sources"], "cached": True}
 
-        # 1) Deep search within uamd.edu.al (+ official admissions portal)
-        search_hits = search_uamd(question, max_results=max(TOP_K, 8))
+        search_hits = search_uamd(question, max_results=max(TOP_K, 12))
         if not search_hits:
-            return {"answer": NO_ANSWER, "sources": []}
+            search_hits = [
+                {"url": "https://uamd.edu.al/", "title": "UAMD", "snippet": "", "provider": "fallback"}
+            ]
 
         urls = [h["url"] for h in search_hits]
+        docs = fetch_many(urls, max_docs=MAX_DOCS, include_pdfs=True)
 
-        # 2) Parallel deep scrape (faculty → departments → files)
-        docs = fetch_many(urls, max_docs=MAX_DOCS, include_pdfs=wants_pdfs(question))
         if not docs:
-            title_contexts = [
-                {
-                    "title": h.get("title") or "UAMD",
-                    "url": h["url"],
-                    "content": f"{h.get('title') or ''}\n{h.get('snippet') or ''}".strip(),
-                    "score": 1.0,
-                }
-                for h in search_hits
-                if (h.get("title") or h.get("snippet"))
-            ]
-            if not title_contexts:
-                return {"answer": NO_ANSWER, "sources": urls}
-            answer = self._generate(question, title_contexts, search_hits=search_hits)
-            return {"answer": answer, "sources": urls}
+            answer = (
+                "Po kërkova në faqen zyrtare të UAMD. Mund të fillosh nga këto burime:\n"
+                "- https://uamd.edu.al/\n"
+                "- https://uamd.edu.al/kendi-i-maturantit/\n"
+                "- https://admissions.prime-solutions.al/\n"
+                "Kontakt: info@uamd.edu.al"
+            )
+            return {"answer": answer, "sources": urls[:5]}
 
-        # 3) Chunk + in-memory semantic re-rank
         chunks = self._chunk_documents(docs)
-        ranked = self._semantic_rerank(question, chunks, top_k=max(TOP_K, 8))
-        relevant = [c for c in ranked if c.get("score", 0) >= MIN_SCORE] or ranked[: min(5, len(ranked))]
+        ranked = self._semantic_rerank(question, chunks, top_k=max(TOP_K, 10))
+        relevant = ranked[: max(6, min(10, len(ranked)))]
 
-        if not relevant:
-            return {"answer": NO_ANSWER, "sources": [d["url"] for d in docs]}
-
-        # 4) Generate
         answer = self._generate(question, relevant, source_docs=docs, search_hits=search_hits)
 
         sources: list[str] = []
@@ -406,12 +377,13 @@ class RAGEngine:
             if d["url"] not in sources:
                 sources.append(d["url"])
 
-        result = {"answer": answer, "sources": sources[:8]}
-        if answer != NO_ANSWER:
+        result = {"answer": answer, "sources": sources[:10]}
+        if "nuk gjeta një përgjigje" not in answer.lower():
             self._query_cache[cache_key] = {**result, "ts": time.time()}
 
-        elapsed = time.time() - started
-        print(f"[rag] answered in {elapsed:.2f}s | docs={len(docs)} chunks={len(chunks)} sources={len(result['sources'])}")
+        print(
+            f"[rag] answered in {time.time() - started:.2f}s | docs={len(docs)} chunks={len(chunks)} sources={len(result['sources'])}"
+        )
         return result
 
 

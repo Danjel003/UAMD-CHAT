@@ -34,6 +34,18 @@ SEED_URLS = [
     "https://uamd.edu.al/misioni-dhe-vizioni/",
 ]
 
+# Always merged into every search so random questions still get official context
+ALWAYS_HUBS: list[dict[str, str]] = [
+    {"url": "https://uamd.edu.al/", "title": "UAMD — Faqja zyrtare"},
+    {"url": "https://uamd.edu.al/kendi-i-maturantit/", "title": "Këndi i maturantit"},
+    {"url": "https://uamd.edu.al/kalendari-akademik/", "title": "Kalendari Akademik"},
+    {"url": "https://uamd.edu.al/sekretarite-mesimore/", "title": "Sekretaritë Mësimore"},
+    {"url": "https://uamd.edu.al/rektorati/", "title": "Rektorati"},
+    {"url": "https://uamd.edu.al/biblioteka-universitare/", "title": "Biblioteka Universitare"},
+    {"url": "https://uamd.edu.al/kontakto/", "title": "Kontakto"},
+    {"url": "https://admissions.prime-solutions.al/", "title": "Admissions UAMD"},
+]
+
 # Curated official pages for common intents (accuracy boost)
 INTENT_SEEDS: list[tuple[list[str], list[dict[str, str]]]] = [
     (
@@ -47,7 +59,7 @@ INTENT_SEEDS: list[tuple[list[str], list[dict[str, str]]]] = [
         ],
     ),
     (
-        ["fakultet", "fakulteti", "fakultetet", "akademi", "dega", "deget"],
+        ["fakultet", "fakulteti", "fakultetet", "dega", "deget"],
         [
             {"url": "https://uamd.edu.al/fakulteti-i-biznesit/", "title": "Fakulteti i Biznesit"},
             {"url": "https://uamd.edu.al/fakulteti-i-edukimit/", "title": "Fakulteti i Edukimit"},
@@ -75,19 +87,39 @@ INTENT_SEEDS: list[tuple[list[str], list[dict[str, str]]]] = [
         ],
     ),
     (
-        ["orar", "orari", "kalendar", "semest"],
+        ["orar", "orari", "kalendar", "semest", "vit akademik", "viti akademik", "sekretari"],
         [
             {"url": "https://uamd.edu.al/orari-2/", "title": "Orari"},
             {"url": "https://uamd.edu.al/kalendari-akademik/", "title": "Kalendari Akademik"},
+            {"url": "https://uamd.edu.al/sekretarite-mesimore/", "title": "Sekretaritë Mësimore"},
         ],
     ),
     (
-        ["rektor", "administrat", "rektorat", "mision", "vizion", "rreth"],
+        ["rektor", "administrat", "rektorat", "mision", "vizion", "rreth", "senat", "senati"],
         [
             {"url": "https://uamd.edu.al/faqja-kryesore/", "title": "Rreth Nesh"},
             {"url": "https://uamd.edu.al/misioni-dhe-vizioni/", "title": "Misioni dhe Vizioni"},
             {"url": "https://uamd.edu.al/rektorati/", "title": "Rektorati"},
             {"url": "https://uamd.edu.al/fjala-e-rektorit/", "title": "Fjala e Rektorit"},
+        ],
+    ),
+    (
+        ["tarif", "pages", "pagesë", "tarife", "çmim", "cmim", "kuota", "pagesa"],
+        [
+            {"url": "https://uamd.edu.al/kendi-i-maturantit/", "title": "Këndi i maturantit"},
+            {"url": "https://admissions.prime-solutions.al/", "title": "Admissions UAMD"},
+            {"url": "https://uamd.edu.al/sekretarite-mesimore/", "title": "Sekretaritë Mësimore"},
+            {"url": "https://uamd.edu.al/", "title": "UAMD — Faqja zyrtare"},
+        ],
+    ),
+    (
+        ["pitagora", "kampus", "campus", "godin", "ndërtes", "ndertes"],
+        [
+            {"url": "https://uamd.edu.al/kampusi/", "title": "Kampusi"},
+            {"url": "https://uamd.edu.al/pitagora/", "title": "Pitagora"},
+            {"url": "https://uamd.edu.al/", "title": "UAMD — Faqja zyrtare"},
+            {"url": "https://uamd.edu.al/faqja-kryesore/", "title": "Rreth Nesh"},
+            {"url": "https://uamd.edu.al/kontakto/", "title": "Kontakto"},
         ],
     ),
     (
@@ -150,14 +182,16 @@ def _dedupe(results: list[dict[str, Any]], limit: int = MAX_RESULTS) -> list[dic
 
 def intent_seed_search(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, Any]]:
     q = query.lower()
-    hits: list[dict[str, Any]] = []
+    scored: list[tuple[int, list[dict[str, str]]]] = []
     for keywords, pages in INTENT_SEEDS:
-        if any(k in q for k in keywords):
-            for p in pages:
-                hits.append(_as_hit(p["url"], p.get("title", ""), provider="intent"))
-    # Always bias with homepage for university questions
-    if any(k in q for k in ("uamd", "universitet", "moisiu", "durrës", "durres")):
-        hits.insert(0, _as_hit("https://uamd.edu.al/", "Universiteti Aleksandër Moisiu Durrës", provider="intent"))
+        hits_n = sum(1 for k in keywords if k in q)
+        if hits_n:
+            scored.append((hits_n, pages))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    hits: list[dict[str, Any]] = []
+    for _, pages in scored:
+        for p in pages:
+            hits.append(_as_hit(p["url"], p.get("title", ""), provider="intent"))
     return _dedupe(hits, max_results)
 
 
@@ -287,14 +321,52 @@ def search_duckduckgo(query: str, max_results: int = MAX_RESULTS) -> list[dict[s
 
 
 def wp_site_search(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, Any]]:
-    """Use the university WordPress search endpoint."""
+    """Use the university WordPress search endpoint (+ REST API)."""
+    results: list[dict[str, Any]] = []
+    # Prefer shorter keyword query — full sentences often return nothing from WP search
+    tokens = [
+        t
+        for t in re.findall(r"[a-zçëA-ZÇË]{4,}", query.lower())
+        if t
+        not in {
+            "cilat", "cili", "cfare", "çfarë", "jane", "janë", "eshte", "është",
+            "mund", "duhet", "lutem", "juve", "kush", "kur", "ku", "sa", "nje", "një",
+            "uamd", "universitet", "universiteti", "moisiu", "durres", "durrës",
+        }
+    ]
+    search_q = " ".join(tokens[:5]) if tokens else query.strip()
+
     try:
-        url = f"https://uamd.edu.al/?s={quote_plus(query)}"
+        api = f"https://uamd.edu.al/wp-json/wp/v2/search?search={quote_plus(search_q)}&per_page={max_results}"
+        resp = requests.get(api, timeout=12, headers={"User-Agent": USER_AGENT})
+        if resp.status_code < 400:
+            for row in resp.json() or []:
+                href = row.get("url")
+                if not href:
+                    continue
+                title = row.get("title") or ""
+                if isinstance(title, dict):
+                    title = title.get("rendered") or ""
+                results.append(
+                    {
+                        "url": href,
+                        "title": BeautifulSoup(str(title), "lxml").get_text(" ", strip=True),
+                        "snippet": "",
+                        "provider": "wp_rest",
+                    }
+                )
+    except Exception as exc:
+        print(f"[search] WP REST error: {exc}")
+
+    try:
+        url = f"https://uamd.edu.al/?s={quote_plus(search_q)}"
         resp = requests.get(url, timeout=15, headers={"User-Agent": USER_AGENT})
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
-        results: list[dict[str, Any]] = []
-        for a in soup.select("article h2 a, h2.entry-title a, .search-results a"):
+        for a in soup.select(
+            "article h2 a, h2.entry-title a, .search-results a, "
+            ".gdlr-core-blog-title a, .kingster-blog-title a, h3 a"
+        ):
             href = a.get("href")
             if not href:
                 continue
@@ -306,10 +378,10 @@ def wp_site_search(query: str, max_results: int = MAX_RESULTS) -> list[dict[str,
                     "provider": "wp_search",
                 }
             )
-        return _dedupe(results, max_results)
     except Exception as exc:
         print(f"[search] WP search error: {exc}")
-        return []
+
+    return _dedupe(results, max_results)
 
 
 def _load_home_candidates() -> list[dict[str, Any]]:
@@ -370,43 +442,56 @@ def crawl_uamd_site(query: str, max_results: int = MAX_RESULTS) -> list[dict[str
 def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, Any]]:
     """
     Deep hybrid search on uamd.edu.al:
-    faculty/department graph → intent seeds → APIs → WP search → crawl → DDG.
+    query-specific (deep/intent/WP) first, then hubs, then APIs/crawl/DDG.
     """
     query = (query or "").strip()
     if not query:
         return []
 
-    merged: list[dict[str, Any]] = []
+    limit = max(max_results, 14)
+    specific: list[dict[str, Any]] = []
+    fallback: list[dict[str, Any]] = []
 
-    # 1) Deep faculty/department expansion (critical for program questions)
+    # 1) Query-specific expansion
     deep_hits = [
         _as_hit(item["url"], item.get("title", ""), provider="deep")
-        for item in deep_urls_for_question(query, limit=max(max_results, 12))
+        for item in deep_urls_for_question(query, limit=limit)
     ]
     if deep_hits:
         print(f"[search] deep map → {len(deep_hits)}")
-        merged.extend(deep_hits)
+        specific.extend(deep_hits)
 
-    intent_hits = intent_seed_search(query, max_results=max_results)
+    intent_hits = intent_seed_search(query, max_results=limit)
     if intent_hits:
         print(f"[search] intent seeds → {len(intent_hits)}")
-        merged.extend(intent_hits)
+        specific.extend(intent_hits)
 
-    for provider in (search_tavily, search_serpapi, wp_site_search, crawl_uamd_site, search_duckduckgo):
+    wp_hits: list[dict[str, Any]] = []
+    try:
+        wp_hits = wp_site_search(query, max_results=limit)
+        if wp_hits:
+            print(f"[search] wp_site_search → {len(wp_hits)}")
+            specific.extend(wp_hits)
+    except Exception as exc:
+        print(f"[search] wp_site_search failed: {exc}")
+
+    # 2) Always-available official hubs (after specific hits so they don't crowd them out)
+    fallback.extend(_as_hit(h["url"], h["title"], provider="hub") for h in ALWAYS_HUBS)
+
+    for provider in (search_tavily, search_serpapi, crawl_uamd_site, search_duckduckgo):
         try:
-            hits = provider(query, max_results=max_results)
+            hits = provider(query, max_results=limit)
         except Exception as exc:
             print(f"[search] provider {provider.__name__} failed: {exc}")
             hits = []
         if hits:
             print(f"[search] {provider.__name__} → {len(hits)}")
-            merged.extend(hits)
-        # Keep collecting a bit, but stop early if we already have a rich deep set
-        if len(_dedupe(merged, max_results)) >= max_results and deep_hits:
+            specific.extend(hits)
+        if len(_dedupe(specific, limit)) >= limit:
             break
 
-    results = _dedupe(merged, max_results)
+    results = _dedupe(specific + fallback, limit)
     if not results:
-        results = _dedupe([_as_hit(u, "UAMD", provider="seed") for u in SEED_URLS], max_results)
+        results = _dedupe([_as_hit(u, "UAMD", provider="seed") for u in SEED_URLS], limit)
     print(f"[search] final → {len(results)} urls")
     return results

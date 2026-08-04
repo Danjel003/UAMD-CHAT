@@ -179,17 +179,22 @@ def deep_urls_for_question(question: str, limit: int = 12) -> list[dict[str, str
             "cikli",
             "dega",
             "deget",
-            "studim",
-            "studime",
             "sa programe",
             "cilat programe",
+            "programet e studimit",
+            "programe studimi",
         )
     )
+    # Avoid treating "tarifat e studimit" / "viti i studimit" as a full program crawl
+    if any(k in q for k in ("tarif", "pages", "pagesë", "pagesa", "kuota")) and not any(
+        k in q for k in ("program", "programe", "bachelor", "master", "dega", "deget")
+    ):
+        wants_programs = False
 
     targets = matched
     if not targets and wants_programs:
         targets = FACULTIES[:]  # deep across all faculties
-    if not targets and any(k in q for k in ("fakultet", "uamd", "universitet")):
+    if not targets and any(k in q for k in ("fakultet", "cilat fakultete", "sa fakultete")):
         targets = FACULTIES[:]
 
     for fac in targets:
