@@ -195,6 +195,22 @@ def match_faculties(question: str) -> list[dict[str, Any]]:
 
 def wants_program_list(question: str) -> bool:
     q = (question or "").lower()
+    # "programet Erasmus / mobilitet" are NOT study-program catalog questions
+    if wants_erasmus(question) and not any(
+        k in q
+        for k in (
+            "fakultet",
+            "bachelor",
+            "bakalaure",
+            "dega",
+            "deget",
+            "cikli i",
+            "program studimi",
+            "programe studimi",
+            "programet e studimit",
+        )
+    ):
+        return False
     if any(k in q for k in ("tarif", "pages", "pagesë", "pagesa", "kuota")) and not any(
         k in q for k in ("program", "programe", "bachelor", "master", "dega", "deget")
     ):

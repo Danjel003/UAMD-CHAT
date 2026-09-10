@@ -487,8 +487,12 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
         print(f"[search] fast-path → {len(results)} urls")
         return results
 
+    # WP search: for Erasmus use focused keywords so results aren't diluted
     try:
-        wp_hits = wp_site_search(query, max_results=min(10, limit))
+        wp_query = query
+        if wants_erasmus(query):
+            wp_query = "Erasmus mobilitet studentor shkëmbim"
+        wp_hits = wp_site_search(wp_query, max_results=min(10, limit))
         if wp_hits:
             print(f"[search] wp_site_search → {len(wp_hits)}")
             specific.extend(wp_hits)
@@ -503,7 +507,12 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
 
     for provider in (crawl_uamd_site, search_tavily, search_serpapi, search_duckduckgo):
         try:
-            hits = provider(query, max_results=limit)
+            q_for_provider = (
+                "Erasmus+ mobilitet studentor UAMD"
+                if wants_erasmus(query) and provider is search_duckduckgo
+                else query
+            )
+            hits = provider(q_for_provider, max_results=limit)
         except Exception as exc:
             print(f"[search] provider {provider.__name__} failed: {exc}")
             hits = []
