@@ -1,6 +1,8 @@
 """
 UAMD deep search map: faculties → departments → known official files.
 Used to expand queries into a focused crawl of uamd.edu.al.
+
+Copyright (c) 2026 Danjel Kalari. All rights reserved.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ FACULTIES: list[dict[str, Any]] = [
             "https://uamd.edu.al/departamenti-i-statistikes-dhe-informatikes-se-zbatuar/",
         ],
         "files": [],
+        "programs": [],
     },
     {
         "id": "edukim",
@@ -62,6 +65,7 @@ FACULTIES: list[dict[str, Any]] = [
             "https://uamd.edu.al/departamenti-i-psikologjise/",
         ],
         "files": [],
+        "programs": [],
     },
     {
         "id": "profesionale",
@@ -88,6 +92,7 @@ FACULTIES: list[dict[str, Any]] = [
         "files": [
             "https://uamd.edu.al/wp-content/uploads/2024/04/FSP.xlsx",
         ],
+        "programs": [],
     },
     {
         "id": "juridike",
@@ -113,6 +118,7 @@ FACULTIES: list[dict[str, Any]] = [
         "files": [
             "https://uamd.edu.al/wp-content/uploads/2024/04/FSHPJ.xlsx",
         ],
+        "programs": [],
     },
     {
         "id": "fti",
@@ -137,6 +143,36 @@ FACULTIES: list[dict[str, Any]] = [
         "files": [
             "https://uamd.edu.al/wp-content/uploads/2024/04/FTI.xlsx",
         ],
+        # Curated from official department pages (complete list for answers)
+        "programs": [
+            {"cycle": "Bachelor", "name": "Teknologji Informacioni", "dept": "Departamenti i Teknologjisë së Informacionit"},
+            {"cycle": "Bachelor", "name": "Multimedia dhe Televizion Digjital", "dept": "Departamenti i Teknologjisë së Informacionit"},
+            {"cycle": "Bachelor", "name": "Sisteme Informacioni", "dept": "Departamenti i Teknologjisë së Informacionit"},
+            {"cycle": "Bachelor", "name": "Shkenca Kompjuterike", "dept": "Departamenti i Shkencave Kompjuterike"},
+            {"cycle": "Bachelor", "name": "Informatikë Anglisht", "dept": "Departamenti i Shkencave Kompjuterike"},
+            {"cycle": "Bachelor", "name": "Matematikë – Informatikë", "dept": "Departamenti i Matematikës"},
+            {"cycle": "Master Shkencor", "name": "Quantum Information Technology", "dept": "Departamenti i Teknologjisë së Informacionit"},
+            {"cycle": "Master Shkencor", "name": "Shkenca Kompjuterike të Aplikuara", "dept": "Departamenti i Shkencave Kompjuterike"},
+            {"cycle": "Master Shkencor", "name": "Mësuesi në Matematikë – Informatikë", "dept": "Departamenti i Matematikës"},
+            {"cycle": "Master Profesional", "name": "Multimedia dhe Televizion Digjital", "dept": "Departamenti i Teknologjisë së Informacionit"},
+            {"cycle": "Master Profesional", "name": "Sisteme ERP", "dept": "Departamenti i Teknologjisë së Informacionit"},
+            {"cycle": "Master Profesional", "name": "Shkenca Kompjuterike të Aplikuara", "dept": "Departamenti i Shkencave Kompjuterike"},
+            {"cycle": "Program profesional 2-vjeçar", "name": "Specialist Pajisjesh Elektronike", "dept": "Departamenti i Teknologjisë së Informacionit"},
+            {"cycle": "Program profesional 2-vjeçar", "name": "Aplikacione Web dhe Dizenjim Grafik", "dept": "Departamenti i Shkencave Kompjuterike"},
+        ],
+        "program_pages": [
+            "https://uamd.edu.al/teknologji-informacioni/",
+            "https://uamd.edu.al/shkenca-kompjuterike/",
+            "https://uamd.edu.al/matematike-informatike/",
+            "https://uamd.edu.al/english-study-programs/",
+        ],
+    },
+]
+
+ERASMUS_HUBS: list[dict[str, str]] = [
+    {
+        "url": "https://uamd.edu.al/marredheniet-me-jashte-dhe-projektet/",
+        "title": "Marrëdhëniet me Jashtë dhe Projektet",
     },
 ]
 
@@ -157,17 +193,13 @@ def match_faculties(question: str) -> list[dict[str, Any]]:
     return [f for _, f in hits]
 
 
-def deep_urls_for_question(question: str, limit: int = 12) -> list[dict[str, str]]:
-    """
-    Expand a user question into a deep set of official UAMD URLs.
-    If a specific faculty is detected, crawl that faculty graph deeply.
-    If asking generally about programs/faculties, include all faculty roots.
-    """
+def wants_program_list(question: str) -> bool:
     q = (question or "").lower()
-    urls: list[dict[str, str]] = []
-
-    matched = match_faculties(question)
-    wants_programs = any(
+    if any(k in q for k in ("tarif", "pages", "pagesë", "pagesa", "kuota")) and not any(
+        k in q for k in ("program", "programe", "bachelor", "master", "dega", "deget")
+    ):
+        return False
+    return any(
         k in q
         for k in (
             "program",
@@ -183,13 +215,93 @@ def deep_urls_for_question(question: str, limit: int = 12) -> list[dict[str, str
             "cilat programe",
             "programet e studimit",
             "programe studimi",
+            "program studimi",
+            "profesionale",
         )
     )
-    # Avoid treating "tarifat e studimit" / "viti i studimit" as a full program crawl
-    if any(k in q for k in ("tarif", "pages", "pagesë", "pagesa", "kuota")) and not any(
-        k in q for k in ("program", "programe", "bachelor", "master", "dega", "deget")
-    ):
-        wants_programs = False
+
+
+def wants_erasmus(question: str) -> bool:
+    q = (question or "").lower()
+    return any(
+        k in q
+        for k in (
+            "erasmus",
+            "mobilitet",
+            "mobiliteti",
+            "shkëmbim",
+            "shkembim",
+            "ndërkombëtar",
+            "nderkombetar",
+            "marrëdhënieve me jashtë",
+            "marredhenieve me jashte",
+            "ka171",
+            "ka1",
+            "credit mobility",
+        )
+    )
+
+
+def format_program_catalog(fac: dict[str, Any]) -> str:
+    programs = fac.get("programs") or []
+    if not programs:
+        return ""
+    lines = [f"Lista e plotë zyrtare e programeve — {fac['name']}:"]
+    by_cycle: dict[str, list[str]] = {}
+    for p in programs:
+        by_cycle.setdefault(p["cycle"], []).append(p["name"])
+    order = [
+        "Bachelor",
+        "Master Shkencor",
+        "Master Profesional",
+        "Program profesional 2-vjeçar",
+    ]
+    for cycle in order:
+        names = by_cycle.get(cycle) or []
+        if not names:
+            continue
+        lines.append(f"\n{cycle}:")
+        for n in names:
+            lines.append(f"- {n}")
+    # any leftover cycles
+    for cycle, names in by_cycle.items():
+        if cycle in order:
+            continue
+        lines.append(f"\n{cycle}:")
+        for n in names:
+            lines.append(f"- {n}")
+    lines.append(f"\nBurimi: {fac['url']}")
+    for dep in fac.get("departments") or []:
+        lines.append(f"Departament: {dep}")
+    return "\n".join(lines)
+
+
+def catalog_context_for_question(question: str) -> str:
+    """Inject curated full program lists when user asks about programs."""
+    if not wants_program_list(question):
+        return ""
+    matched = match_faculties(question)
+    targets = matched or ([] if "fakultet" not in question.lower() else FACULTIES[:])
+    # If asking programs of a specific faculty, only that one
+    blocks = []
+    for fac in targets:
+        block = format_program_catalog(fac)
+        if block:
+            blocks.append(block)
+    return "\n\n".join(blocks)
+
+
+def deep_urls_for_question(question: str, limit: int = 12) -> list[dict[str, str]]:
+    """
+    Expand a user question into a deep set of official UAMD URLs.
+    If a specific faculty is detected, crawl that faculty graph deeply.
+    If asking generally about programs/faculties, include all faculty roots.
+    """
+    q = (question or "").lower()
+    urls: list[dict[str, str]] = []
+
+    matched = match_faculties(question)
+    wants_programs = wants_program_list(question)
 
     targets = matched
     if not targets and wants_programs:
@@ -199,14 +311,15 @@ def deep_urls_for_question(question: str, limit: int = 12) -> list[dict[str, str
 
     for fac in targets:
         urls.append({"url": fac["url"], "title": fac["name"], "provider": "deep"})
-        # For program questions, include all departments + files
+        # For program questions, include ALL departments + files + program pages
         if wants_programs or matched:
             for dep in fac["departments"]:
                 urls.append({"url": dep, "title": f"Departament — {fac['name']}", "provider": "deep"})
             for f in fac.get("files") or []:
                 urls.append({"url": f, "title": f"Dokument — {fac['name']}", "provider": "deep"})
+            for p in fac.get("program_pages") or []:
+                urls.append({"url": p, "title": f"Program — {fac['name']}", "provider": "deep"})
 
-    # Always useful anchors
     if any(k in q for k in ("pranim", "aplik", "admission", "maturant")):
         urls.extend(
             [
@@ -215,12 +328,15 @@ def deep_urls_for_question(question: str, limit: int = 12) -> list[dict[str, str
             ]
         )
 
+    if wants_erasmus(question):
+        for hub in ERASMUS_HUBS:
+            urls.append({"url": hub["url"], "title": hub["title"], "provider": "deep"})
+
     # Deduplicate preserving order
     seen = set()
     out = []
     for item in urls:
         u = item["url"].rstrip("/") + ("/" if not item["url"].lower().endswith((".xlsx", ".xls", ".pdf")) else "")
-        # normalize double slashes in path (except after https:)
         if "://" in u:
             scheme, rest = u.split("://", 1)
             while "//" in rest:

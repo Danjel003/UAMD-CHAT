@@ -123,6 +123,14 @@ INTENT_SEEDS: list[tuple[list[str], list[dict[str, str]]]] = [
         ],
     ),
     (
+        ["erasmus", "mobilitet", "mobiliteti", "shkëmbim", "shkembim", "nderkombetar", "ndërkombëtar", "ka171"],
+        [
+            {"url": "https://uamd.edu.al/marredheniet-me-jashte-dhe-projektet/", "title": "Marrëdhëniet me Jashtë dhe Projektet"},
+            {"url": "https://uamd.edu.al/", "title": "UAMD — Faqja zyrtare"},
+            {"url": "https://uamd.edu.al/keshilli-studentor/", "title": "Këshilli studentor"},
+        ],
+    ),
+    (
         ["student", "burs", "bibliotek", "alumni", "karrier"],
         [
             {"url": "https://uamd.edu.al/keshilli-studentor/", "title": "Këshilli studentor"},
@@ -448,11 +456,14 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
     Fast hybrid search on uamd.edu.al.
     Prefer instant deep/intent hits; only call slow web providers when needed.
     """
+    from uamd_map import wants_erasmus, wants_program_list
+
     query = (query or "").strip()
     if not query:
         return []
 
-    limit = min(max(max_results, 8), 10)
+    wide = wants_program_list(query) or wants_erasmus(query)
+    limit = 16 if wide else min(max(max_results, 8), 10)
     specific: list[dict[str, Any]] = []
     fallback = [_as_hit(h["url"], h["title"], provider="hub") for h in ALWAYS_HUBS[:5]]
 
@@ -470,15 +481,14 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
         specific.extend(intent_hits)
 
     strong = _dedupe(specific, limit)
-    # Fast path: enough curated URLs → skip WP/DDG/crawl (biggest latency win)
-    if len(strong) >= 4 and (deep_hits or intent_hits):
+    # Fast path for simple curated intents — NOT for programs/erasmus
+    if len(strong) >= 4 and (deep_hits or intent_hits) and not wide:
         results = _dedupe(strong + fallback, limit)
         print(f"[search] fast-path → {len(results)} urls")
         return results
 
-    # Medium path: WP REST only (skip HTML theme parse), short timeout via requests
     try:
-        wp_hits = wp_site_search(query, max_results=min(6, limit))
+        wp_hits = wp_site_search(query, max_results=min(10, limit))
         if wp_hits:
             print(f"[search] wp_site_search → {len(wp_hits)}")
             specific.extend(wp_hits)
@@ -486,12 +496,11 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
         print(f"[search] wp_site_search failed: {exc}")
 
     strong = _dedupe(specific, limit)
-    if len(strong) >= 4:
+    if len(strong) >= 4 and not wants_erasmus(query):
         results = _dedupe(strong + fallback, limit)
         print(f"[search] mid-path → {len(results)} urls")
         return results
 
-    # Slow path only when thin: crawl home links, then optional APIs/DDG
     for provider in (crawl_uamd_site, search_tavily, search_serpapi, search_duckduckgo):
         try:
             hits = provider(query, max_results=limit)

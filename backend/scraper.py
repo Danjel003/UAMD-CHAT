@@ -426,20 +426,27 @@ def fetch_many(
             pending_joined = " ".join(pending)
             for fac in FACULTIES:
                 fac_key = normalize_url(fac["url"]).rstrip("/")
-                if fac_key in pending_joined or any(fac_key == normalize_url(p).rstrip("/") for p in pending):
-                    for f in (fac.get("files") or [])[:1]:
+                if fac_key in pending_joined or any(
+                    fac_key == normalize_url(p).rstrip("/") for p in pending
+                ):
+                    for f in fac.get("files") or []:
                         f = normalize_url(f)
                         if f not in seen:
                             seen.add(f)
                             extra.append(f)
-                    # At most 2 departments per matched faculty (not full graph)
-                    for dep in (fac.get("departments") or [])[:2]:
+                    # Pull full department graph for complete program lists
+                    for dep in fac.get("departments") or []:
                         dep = normalize_url(dep)
                         if dep not in seen:
                             seen.add(dep)
                             extra.append(dep)
+                    for p in fac.get("program_pages") or []:
+                        p = normalize_url(p)
+                        if p not in seen:
+                            seen.add(p)
+                            extra.append(p)
 
-    extra = extra[: max(0, 4)]
+    extra = extra[: max(0, 12)]
     if extra:
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(extra))) as pool:
             for fut in as_completed({pool.submit(fetch_url, u): u for u in extra}):
@@ -455,7 +462,9 @@ def fetch_many(
 
     order = {u: i for i, u in enumerate(pending + extra)}
     results.sort(key=lambda d: order.get(normalize_url(d["url"]), 999))
-    return results[:max_docs]
+    # Allow extra docs when faculty expansion pulled departments/files
+    cap = max(max_docs, min(len(results), max_docs + (8 if expand_faculty else 0)))
+    return results[:cap]
 
 
 def content_hash(text: str) -> str:

@@ -21,6 +21,7 @@ from openai import OpenAI
 
 from scraper import content_hash, fetch_many
 from search_engine import search_uamd
+from uamd_map import catalog_context_for_question, wants_erasmus, wants_program_list
 
 load_dotenv()
 
@@ -61,6 +62,13 @@ OUT_OF_SCOPE = (
     "Për fillim: https://uamd.edu.al/"
 )
 
+PERSONAL_DATA_REFUSAL = (
+    "Nuk mund të përgjigjem sepse nuk kam informacion për të dhëna personale "
+    "dhe informacion jashtë korpusit publik të Universitetit 'Aleksandër Moisiu' Durrës. "
+    "Mund të pyesësh për informacione zyrtare publike në uamd.edu.al "
+    "(fakultete, programe, pranime, Erasmus, kontakt, etj.)."
+)
+
 _lock = threading.Lock()
 _engine: "RAGEngine | None" = None
 
@@ -78,6 +86,49 @@ def looks_out_of_scope(question: str) -> bool:
         # still allow if university mentioned
         if any(k in q for k in ("uamd", "universitet", "moisiu", "fakultet", "student")):
             return False
+        return True
+    return False
+
+
+def looks_like_personal_data(question: str) -> bool:
+    """Refuse private student/staff records not available in the public corpus."""
+    q = (question or "").lower().strip()
+    personal_signals = [
+        "nota mesatare",
+        "notën mesatare",
+        "noten mesatare",
+        "mesatarja e student",
+        "mesatarja ime",
+        "sa kam mesatare",
+        "sa eshte nota",
+        "sa është nota",
+        "notat e student",
+        "transkript",
+        "transcript",
+        "numri i amzës",
+        "numri i amzes",
+        "id studenti",
+        "id e studentit",
+        "password",
+        "fjalëkalim",
+        "fjalekalim",
+        "pitagora password",
+        "llogaria ime",
+        "të dhëna personale",
+        "te dhena personale",
+        "paga e",
+        "salari",
+        "numri personal",
+        "nid",
+    ]
+    if any(s in q for s in personal_signals):
+        return True
+    # e.g. "nota mesatare e studentit X" / "mesatarja e Anës"
+    if re.search(r"\b(nota|notën|noten|mesatar\w*)\b.*\b(student\w*|emri|emër)\b", q):
+        return True
+    if re.search(r"\b(studentit|studentes|studentës)\s+[a-zçë]{2,}", q) and any(
+        k in q for k in ("nota", "mesatar", "notat", "amz")
+    ):
         return True
     return False
 
@@ -295,8 +346,9 @@ class RAGEngine:
         contexts: list[dict[str, Any]],
         source_docs: list[dict[str, Any]] | None = None,
         search_hits: list[dict[str, Any]] | None = None,
+        catalog_block: str = "",
     ) -> str:
-        if not contexts and not source_docs:
+        if not contexts and not source_docs and not catalog_block:
             return NO_ANSWER
 
         api_key = os.getenv("OPENAI_API_KEY", "")
@@ -305,22 +357,59 @@ class RAGEngine:
 
         self._openai = OpenAI(api_key=api_key)
 
+        is_programs = wants_program_list(question)
+        is_erasmus = wants_erasmus(question)
+
         pages_block = ""
         docs_for_list = source_docs or []
+        page_limit = 10 if (is_programs or is_erasmus) else 5
         if docs_for_list:
-            lines = [f"- {d.get('title') or 'Faqe UAMD'}: {d.get('url')}" for d in docs_for_list[:5]]
+            lines = [f"- {d.get('title') or 'Faqe UAMD'}: {d.get('url')}" for d in docs_for_list[:page_limit]]
             pages_block = "Faqet zyrtare të gjetura:\n" + "\n".join(lines) + "\n\n"
         elif search_hits:
-            lines = [f"- {h.get('title') or 'UAMD'}: {h.get('url')}" for h in search_hits[:5]]
+            lines = [f"- {h.get('title') or 'UAMD'}: {h.get('url')}" for h in search_hits[:page_limit]]
             pages_block = "Rezultatet e kërkimit:\n" + "\n".join(lines) + "\n\n"
 
+        ctx_limit = 12 if (is_programs or is_erasmus) else 5
+        ctx_chars = 1400 if (is_programs or is_erasmus) else 900
         context_block = "\n\n".join(
-            f"[Burimi: {c.get('title') or 'UAMD'}] ({c.get('url')})\n{(c.get('content') or '')[:900]}"
-            for c in contexts[:5]
+            f"[Burimi: {c.get('title') or 'UAMD'}] ({c.get('url')})\n{(c.get('content') or '')[:ctx_chars]}"
+            for c in contexts[:ctx_limit]
         )
+
+        catalog_section = ""
+        if catalog_block:
+            catalog_section = (
+                "LISTA E PLOTË E PROGRAMEVE (nga burimet zyrtare të fakultetit — përdore detyrimisht):\n"
+                f"{catalog_block}\n\n"
+            )
+
+        extra_rules = ""
+        max_tokens = 280
+        if is_programs:
+            max_tokens = 700
+            extra_rules = (
+                "- Pyetja kërkon LISTËN E PLOTË të programeve.\n"
+                "- Listo TË GJITHA programet: Bachelor, Master Shkencor, Master Profesional "
+                "dhe programet profesionale 2-vjeçare.\n"
+                "- MOS lër asnjë program jashtë nëse është në listën e plotë ose në kontekst.\n"
+                "- Organizoi përgjigjen në seksione sipas ciklit (Bachelor / Master / Profesional).\n"
+                "- Nuk vlen limiti i 6 fjalive për këtë pyetje; jep listën e plotë.\n"
+            )
+        elif is_erasmus:
+            max_tokens = 650
+            extra_rules = (
+                "- Jep informacion SA MË TË PLOTË për Erasmus+ / mobilitetet studentore.\n"
+                "- Përmend: ku publikohen thirrjet, çfarë ofrohet (shkëmbime studentore, bursa, ICM), "
+                "ku të aplikojnë / kontaktojnë (Drejtoria e Projekteve dhe Marrëdhënieve me Jashtë), "
+                "dhe linke zyrtare.\n"
+                "- Nëse ke thirrje konkrete, përmend disa shembuj me afate/destinacione.\n"
+                "- Nuk vlen limiti i 6 fjalive; jep përmbledhje të plotë.\n"
+            )
 
         user_prompt = (
             f"{pages_block}"
+            f"{catalog_section}"
             f"Ekstrakte nga burimet zyrtare:\n\n{context_block}\n\n"
             f"Pyetja: {question}\n\n"
             "Udhëzime të detyrueshme:\n"
@@ -328,13 +417,14 @@ class RAGEngine:
             "- Nxirr sa më shumë fakte relevante nga konteksti.\n"
             "- Nëse mungon një detaj, thuaj çfarë dihet dhe jep linkun më të mirë zyrtar.\n"
             "- MOS përdor frazën 'Nuk gjeta një përgjigje të saktë'.\n"
-            "- Maksimumi 6 fjali ose lista e shkurtër."
+            "- Për pyetje të zakonshme: maksimumi 6 fjali ose lista e shkurtër.\n"
+            f"{extra_rules}"
         )
 
         response = self._openai.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             temperature=0,
-            max_tokens=280,
+            max_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -342,6 +432,8 @@ class RAGEngine:
         )
         answer = (response.choices[0].message.content or "").strip()
         if (not answer) or ("nuk gjeta një përgjigje" in answer.lower()):
+            if catalog_block:
+                return catalog_block + "\n\nBurime: https://uamd.edu.al/"
             return self._fallback_from_docs(question, docs_for_list or [], search_hits or [])
         return answer
 
@@ -357,33 +449,45 @@ class RAGEngine:
         if looks_out_of_scope(question):
             return {"answer": OUT_OF_SCOPE, "sources": ["https://uamd.edu.al/"]}
 
+        if looks_like_personal_data(question):
+            return {
+                "answer": PERSONAL_DATA_REFUSAL,
+                "sources": ["https://uamd.edu.al/"],
+            }
+
         cache_key = re.sub(r"\s+", " ", question.lower()).strip()
         cached = self._query_cache.get(cache_key)
         if cached and time.time() - cached["ts"] < self._cache_ttl:
-            # Never serve stale refusal answers
             if "nuk gjeta një përgjigje" not in (cached.get("answer") or "").lower():
                 return {"answer": cached["answer"], "sources": cached["sources"], "cached": True}
 
-        search_hits = search_uamd(question, max_results=max(TOP_K, 8))
+        is_programs = wants_program_list(question)
+        is_erasmus = wants_erasmus(question)
+        wide = is_programs or is_erasmus
+
+        search_hits = search_uamd(question, max_results=16 if wide else max(TOP_K, 8))
         if not search_hits:
             search_hits = [
                 {"url": "https://uamd.edu.al/", "title": "UAMD", "snippet": "", "provider": "fallback"}
             ]
 
         urls = [h["url"] for h in search_hits]
-        need_pdfs = wants_pdfs(question)
-        expand = any(
+        need_pdfs = wants_pdfs(question) or is_programs
+        expand = is_programs or any(
             k in question.lower()
-            for k in ("program", "programe", "bachelor", "master", "dega", "deget", "fakultet")
+            for k in ("bachelor", "master", "dega", "deget", "fakultet")
         )
+        max_docs = 10 if wide else MAX_DOCS
         docs = fetch_many(
             urls,
-            max_docs=MAX_DOCS,
+            max_docs=max_docs,
             include_pdfs=need_pdfs,
             expand_faculty=expand,
         )
 
-        if not docs:
+        catalog_block = catalog_context_for_question(question)
+
+        if not docs and not catalog_block:
             answer = (
                 "Po kërkova në faqen zyrtare të UAMD. Mund të fillosh nga këto burime:\n"
                 "- https://uamd.edu.al/\n"
@@ -393,11 +497,58 @@ class RAGEngine:
             )
             return {"answer": answer, "sources": urls[:5]}
 
-        chunks = self._chunk_documents(docs)
-        ranked = self._semantic_rerank(question, chunks, top_k=TOP_K)
-        relevant = ranked[: min(TOP_K, len(ranked))]
+        if wide:
+            chunks: list[dict[str, Any]] = []
+            for doc in docs:
+                lead = (
+                    f"{doc.get('title') or ''}\n{doc.get('url') or ''}\n"
+                    f"{(doc.get('text') or '')[:1200]}"
+                ).strip()
+                if len(lead) >= 40:
+                    chunks.append(
+                        {
+                            "id": f"{content_hash(doc['url'])}_lead",
+                            "content": lead,
+                            "url": doc["url"],
+                            "title": doc.get("title") or doc["url"],
+                        }
+                    )
+                for i, content in enumerate(
+                    simple_split(doc["text"], chunk_size=800, overlap=80)[:5]
+                ):
+                    if len(content.strip()) < 40:
+                        continue
+                    chunks.append(
+                        {
+                            "id": f"{content_hash(doc['url'])}_{i}",
+                            "content": content,
+                            "url": doc["url"],
+                            "title": doc.get("title") or doc["url"],
+                        }
+                    )
+            if catalog_block:
+                chunks.insert(
+                    0,
+                    {
+                        "id": "catalog",
+                        "content": catalog_block,
+                        "url": "https://uamd.edu.al/",
+                        "title": "Lista e plotë e programeve (katalog zyrtar)",
+                    },
+                )
+            ranked = self._semantic_rerank(question, chunks[:40], top_k=12)
+        else:
+            chunks = self._chunk_documents(docs)
+            ranked = self._semantic_rerank(question, chunks, top_k=TOP_K)
 
-        answer = self._generate(question, relevant, source_docs=docs, search_hits=search_hits)
+        relevant = ranked[: min(12 if wide else TOP_K, len(ranked))]
+        answer = self._generate(
+            question,
+            relevant,
+            source_docs=docs,
+            search_hits=search_hits,
+            catalog_block=catalog_block,
+        )
 
         sources: list[str] = []
         for c in relevant:
@@ -407,12 +558,13 @@ class RAGEngine:
             if d["url"] not in sources:
                 sources.append(d["url"])
 
-        result = {"answer": answer, "sources": sources[:10]}
+        result = {"answer": answer, "sources": sources[:12]}
         if "nuk gjeta një përgjigje" not in answer.lower():
             self._query_cache[cache_key] = {**result, "ts": time.time()}
 
         print(
-            f"[rag] answered in {time.time() - started:.2f}s | docs={len(docs)} chunks={len(chunks)} sources={len(result['sources'])}"
+            f"[rag] answered in {time.time() - started:.2f}s | docs={len(docs)} "
+            f"chunks={len(chunks)} sources={len(result['sources'])}"
         )
         return result
 
