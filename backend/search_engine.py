@@ -97,10 +97,11 @@ INTENT_SEEDS: list[tuple[list[str], list[dict[str, str]]]] = [
     (
         ["rektor", "administrat", "rektorat", "mision", "vizion", "rreth", "senat", "senati"],
         [
-            {"url": "https://uamd.edu.al/faqja-kryesore/", "title": "Rreth Nesh"},
-            {"url": "https://uamd.edu.al/misioni-dhe-vizioni/", "title": "Misioni dhe Vizioni"},
             {"url": "https://uamd.edu.al/rektorati/", "title": "Rektorati"},
             {"url": "https://uamd.edu.al/fjala-e-rektorit/", "title": "Fjala e Rektorit"},
+            {"url": "https://uamd.edu.al/autoritetet-dhe-organet-drejtuese/", "title": "Autoritetet dhe organet drejtuese"},
+            {"url": "https://uamd.edu.al/misioni-dhe-vizioni/", "title": "Misioni dhe Vizioni"},
+            {"url": "https://uamd.edu.al/faqja-kryesore/", "title": "Rreth Nesh"},
         ],
     ),
     (
@@ -360,12 +361,31 @@ def _freshness_score(url: str) -> int:
     return score
 
 
+def _is_newsish(url: str, title: str = "") -> bool:
+    hay = f"{url} {title}".lower()
+    return any(
+        k in hay
+        for k in (
+            "priti",
+            "takim",
+            "vizitoi",
+            "priti-nje",
+            "priti-sot",
+            "bashkepunues",
+            "delegacion",
+            "ambasadore",
+        )
+    )
+
+
 def _prefer_fresh(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     ranked = sorted(
         results,
         key=lambda item: (
+            0 if _is_newsish(item.get("url") or "", item.get("title") or "") else 2,
             _freshness_score(item.get("url") or ""),
             1 if (item.get("provider") or "").startswith("wp") else 0,
+            3 if (item.get("provider") or "") == "canonical" else 0,
         ),
         reverse=True,
     )
@@ -545,24 +565,61 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
     person = wants_person_lookup(query)
     person_name = extract_person_name(query) if person else ""
     wide = wants_program_list(query) or wants_erasmus(query) or person
+    q_low = query.lower()
+    is_rektor = any(k in q_low for k in ("rektor", "rektorat", "zv. rektor", "zëvendës rektor"))
     # Keep URL sets tight for speed; person deep-dive happens in rag phase-2
     limit = 10 if person else (12 if wide else min(max(max_results, 8), 8))
     specific: list[dict[str, Any]] = []
-    fallback = [_as_hit(h["url"], h["title"], provider="hub") for h in ALWAYS_HUBS[:4]]
+    # Avoid stuffing generic hubs into precise leadership/person answers
+    if person or is_rektor:
+        fallback = [
+            _as_hit("https://uamd.edu.al/rektorati/", "Rektorati", provider="hub"),
+            _as_hit(
+                "https://uamd.edu.al/autoritetet-dhe-organet-drejtuese/",
+                "Autoritetet",
+                provider="hub",
+            ),
+        ]
+    elif wants_program_list(query):
+        fallback = []
+    else:
+        fallback = [_as_hit(h["url"], h["title"], provider="hub") for h in ALWAYS_HUBS[:3]]
 
-    # Live WP first — avoid answering only from static seed maps
+    # Canonical leadership page first for rector questions
+    if is_rektor:
+        specific.append(_as_hit("https://uamd.edu.al/rektorati/", "Rektorati", provider="canonical"))
+        specific.append(
+            _as_hit("https://uamd.edu.al/fjala-e-rektorit/", "Fjala e Rektorit", provider="canonical")
+        )
+
+    # Live WP — for rector bio prefer name + rektorati, demote later via ranking
     try:
         wp_query = query
         if wants_erasmus(query):
             wp_query = "Erasmus mobilitet studentor shkëmbim"
+        elif is_rektor and not person_name:
+            wp_query = "Rektor Shkëlqim Fortuzi"
         elif person and person_name:
             wp_query = person_name
         elif wants_program_list(query):
             wp_query = f"{query} 2025 2026 program studimi"
         wp_hits = wp_site_search(wp_query, max_results=min(8, limit))
         if wp_hits:
-            print(f"[search] wp_site_search → {len(wp_hits)}")
-            specific.extend(wp_hits)
+            # Put meeting-news after canonical pages for leadership questions
+            if is_rektor or person:
+                ranked_wp = sorted(
+                    wp_hits,
+                    key=lambda h: (
+                        0 if _is_newsish(h.get("url") or "", h.get("title") or "") else 1,
+                        _freshness_score(h.get("url") or ""),
+                    ),
+                    reverse=True,
+                )
+                print(f"[search] wp_site_search → {len(ranked_wp)}")
+                specific.extend(ranked_wp)
+            else:
+                print(f"[search] wp_site_search → {len(wp_hits)}")
+                specific.extend(wp_hits)
     except Exception as exc:
         print(f"[search] wp_site_search failed: {exc}")
 
@@ -595,9 +652,26 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
             specific.append(_as_hit(seed[0], seed[1], provider="intent"))
 
     strong = _prefer_fresh(specific, limit)
+    if is_rektor:
+        # Hard-pin authoritative leadership page first
+        strong = _dedupe(
+            [
+                _as_hit("https://uamd.edu.al/rektorati/", "Rektorati", provider="canonical"),
+                *strong,
+            ],
+            limit,
+        )
     # Person/Erasmus/programs: stop after WP+map — skip slow DDG/crawl
     if len(strong) >= 3:
         results = _prefer_fresh(strong + fallback, limit)
+        if is_rektor:
+            results = _dedupe(
+                [
+                    _as_hit("https://uamd.edu.al/rektorati/", "Rektorati", provider="canonical"),
+                    *results,
+                ],
+                limit,
+            )
         print(f"[search] mid-path → {len(results)} urls")
         return results
 

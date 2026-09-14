@@ -248,7 +248,225 @@ def _keyword_score(question: str, text: str, person_name: str = "") -> float:
     return min(score, 1.5)
 
 
-class RAGEngine:
+_GENERIC_SOURCE_PATHS = {
+    "",
+    "/",
+    "/faqja-kryesore",
+    "/kendi-i-maturantit",
+    "/biblioteka-universitare",
+    "/kontakto",
+}
+
+_CANONICAL_PATHS = {
+    "/rektorati",
+    "/fjala-e-rektorit",
+    "/autoritetet-dhe-organet-drejtuese",
+    "/misioni-dhe-vizioni",
+    "/kalendari-akademik",
+    "/sekretarite-mesimore",
+    "/marredheniet-me-jashte-dhe-projektet",
+}
+
+
+def _url_path(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+
+        return (urlparse(url).path or "/").rstrip("/") or "/"
+    except Exception:
+        return "/"
+
+
+def _is_generic_source(url: str) -> bool:
+    path = _url_path(url)
+    if path in _GENERIC_SOURCE_PATHS or path == "/":
+        return True
+    # Bare homepage variants
+    u = (url or "").rstrip("/").lower()
+    return u in {"https://uamd.edu.al", "http://uamd.edu.al"}
+
+
+def _is_meeting_news(url: str, title: str = "") -> bool:
+    hay = f"{url} {title}".lower()
+    return any(
+        k in hay
+        for k in (
+            "priti",
+            "takim",
+            "vizitoi",
+            "priti-nje",
+            "priti-sot",
+            "bashkepunues",
+            "delegacion",
+            "ambasadore",
+        )
+    )
+
+
+def _doc_mentions_person(doc: dict[str, Any], person_name: str) -> bool:
+    if not person_name:
+        return True
+    name = person_name.lower().strip()
+    hay = f"{doc.get('title') or ''} {doc.get('text') or ''} {doc.get('content') or ''}".lower()
+    if name in hay:
+        return True
+    parts = [p for p in name.split() if len(p) >= 3]
+    return bool(parts) and all(p in hay for p in parts)
+
+
+def _authority_score(
+    url: str,
+    title: str,
+    text: str,
+    question: str,
+    person_name: str = "",
+    base: float = 0.0,
+) -> float:
+    """Prefer canonical pages that actually contain the answer facts."""
+    q = (question or "").lower()
+    path = _url_path(url)
+    score = float(base)
+    hay = f"{title} {text}".lower()
+
+    if _is_generic_source(url):
+        score -= 40
+
+    if path in _CANONICAL_PATHS:
+        score += 18
+
+    # Leadership / rector → rektorati is the authoritative bio page
+    if any(k in q for k in ("rektor", "zv. rektor", "zëvendës rektor", "rektorat")):
+        if path == "/rektorati":
+            score += 55
+        elif path == "/fjala-e-rektorit":
+            score += 20
+        elif _is_meeting_news(url, title):
+            score -= 35
+
+    if person_name:
+        if _doc_mentions_person({"title": title, "text": text}, person_name):
+            score += 30
+        else:
+            score -= 45
+        if _is_meeting_news(url, title) and path not in _CANONICAL_PATHS:
+            score -= 15
+
+    if wants_program_list(question):
+        if "fakultet" in path or "departament" in path:
+            score += 25
+        if _is_meeting_news(url, title):
+            score -= 20
+
+    if wants_erasmus(question):
+        if "marredheniet-me-jashte" in path or "erasmus" in path or "projekt" in path:
+            score += 30
+
+    # Prefer shorter official paths over long news slugs
+    depth = path.count("/")
+    if depth <= 2 and "wp-content" not in (url or "").lower():
+        score += 4
+    if len(path) > 80:
+        score -= 8
+
+    # Content must be useful
+    if len((text or "").strip()) < 80:
+        score -= 10
+
+    return score
+
+
+def _pick_precise_sources(
+    question: str,
+    ranked_chunks: list[dict[str, Any]],
+    docs: list[dict[str, Any]],
+    person_name: str = "",
+    limit: int = 3,
+) -> list[str]:
+    """Return only URLs that actually support the answer — not generic hubs."""
+    by_url: dict[str, dict[str, Any]] = {}
+    for d in docs:
+        u = d.get("url") or ""
+        if u:
+            by_url[u] = d
+
+    scored: list[tuple[float, str]] = []
+    seen: set[str] = set()
+
+    for c in ranked_chunks:
+        url = c.get("url") or ""
+        if not url or url in seen or url == "https://uamd.edu.al/" or _is_generic_source(url):
+            continue
+        if url.startswith("catalog") or c.get("id") == "catalog":
+            continue
+        doc = by_url.get(url) or {}
+        title = c.get("title") or doc.get("title") or ""
+        text = c.get("content") or doc.get("text") or ""
+        if person_name and not _doc_mentions_person(
+            {"title": title, "text": text, "content": c.get("content") or ""},
+            person_name,
+        ):
+            continue
+        s = _authority_score(
+            url,
+            title,
+            text,
+            question,
+            person_name=person_name,
+            base=float(c.get("score") or c.get("kw") or 0) * 10,
+        )
+        if s < 5:
+            continue
+        seen.add(url)
+        scored.append((s, url))
+
+    # Fill from docs if needed (still authority-filtered)
+    if len(scored) < limit:
+        for d in docs:
+            url = d.get("url") or ""
+            if not url or url in seen or _is_generic_source(url):
+                continue
+            if person_name and not _doc_mentions_person(d, person_name):
+                continue
+            s = _authority_score(
+                url,
+                d.get("title") or "",
+                d.get("text") or "",
+                question,
+                person_name=person_name,
+                base=0,
+            )
+            if s < 8:
+                continue
+            seen.add(url)
+            scored.append((s, url))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    out = [u for _, u in scored[:limit]]
+
+    # Last resort: best non-generic doc
+    if not out:
+        for d in docs:
+            url = d.get("url") or ""
+            if url and not _is_generic_source(url):
+                out.append(url)
+                break
+    return out
+
+
+def _sort_docs_by_authority(
+    docs: list[dict[str, Any]], question: str, person_name: str = ""
+) -> list[dict[str, Any]]:
+    return sorted(
+        docs,
+        key=lambda d: _authority_score(
+            d.get("url") or "",
+            d.get("title") or "",
+            d.get("text") or "",
+            question,
+            person_name=person_name,
+        ),
+        reverse=True,
+    )
     def __init__(self) -> None:
         self._embedding_model = None
         self._embedding_backend = EMBEDDING_BACKEND
@@ -373,11 +591,20 @@ class RAGEngine:
                 chunk["content"] + " " + (chunk.get("title") or ""),
                 person_name=person_name,
             )
+            auth = _authority_score(
+                chunk.get("url") or "",
+                chunk.get("title") or "",
+                chunk.get("content") or "",
+                question,
+                person_name=person_name,
+                base=0,
+            )
             item = dict(chunk)
             item["kw"] = kw
-            item["score"] = kw
+            item["auth"] = auth
+            item["score"] = kw + max(auth, 0) / 50.0
             pre.append(item)
-        pre.sort(key=lambda x: x["kw"], reverse=True)
+        pre.sort(key=lambda x: x["score"], reverse=True)
 
         mode = USE_EMBEDDINGS
         strong_kw = pre and pre[0]["kw"] >= 0.35
@@ -391,7 +618,8 @@ class RAGEngine:
         doc_vecs = self._embed([c["content"] for c in candidates])
         for i, chunk in enumerate(candidates):
             semantic = float(doc_vecs[i] @ q_vec)
-            chunk["score"] = 0.7 * semantic + 0.3 * float(chunk.get("kw") or 0)
+            auth = float(chunk.get("auth") or 0) / 50.0
+            chunk["score"] = 0.55 * semantic + 0.25 * float(chunk.get("kw") or 0) + 0.2 * auth
         candidates.sort(key=lambda x: x["score"], reverse=True)
         return candidates[:top_k]
 
@@ -444,13 +672,26 @@ class RAGEngine:
 
         pages_block = ""
         docs_for_list = source_docs or []
-        page_limit = 10 if deep_q else 6
-        if docs_for_list:
-            lines = [f"- {d.get('title') or 'Faqe UAMD'}: {d.get('url')}" for d in docs_for_list[:page_limit]]
-            pages_block = "Faqet zyrtare të gjetura:\n" + "\n".join(lines) + "\n\n"
-        elif search_hits:
-            lines = [f"- {h.get('title') or 'UAMD'}: {h.get('url')}" for h in search_hits[:page_limit]]
-            pages_block = "Rezultatet e kërkimit:\n" + "\n".join(lines) + "\n\n"
+        page_limit = 4 if deep_q else 3
+        # Only list the pages we will actually cite (precise, not hubs)
+        cite_docs = [
+            d
+            for d in docs_for_list
+            if d.get("url") and not _is_generic_source(d["url"])
+        ][:page_limit]
+        if not cite_docs and search_hits:
+            cite_docs = [
+                {"title": h.get("title"), "url": h.get("url")}
+                for h in search_hits
+                if h.get("url") and not _is_generic_source(h["url"])
+            ][:page_limit]
+        if cite_docs:
+            lines = [f"- {d.get('title') or 'Faqe UAMD'}: {d.get('url')}" for d in cite_docs]
+            pages_block = (
+                "Faqet zyrtare që duhet të përdorësh (prioriteti sipas rendit):\n"
+                + "\n".join(lines)
+                + "\n\n"
+            )
 
         ctx_limit = 10 if deep_q else 6
         ctx_chars = 2200 if is_person else (1800 if deep_q else 1200)
@@ -506,6 +747,8 @@ class RAGEngine:
             f"Pyetja: {question}\n\n"
             "Udhëzime të detyrueshme:\n"
             "- Përgjigju NË SHQIP, në stil INSTITUCIONAL, me PARAGRAFË të bukur dhe të saktë.\n"
+            "- Bazohu te faqet kanonike të listuara sipër (p.sh. Rektorati, fakulteti, departamenti), "
+            "jo te njoftime takimesh kur ato nuk shtojnë fakte biografike.\n"
             "- MOS përdor ##, **, *, - , lista, emoji ose seksion Burime.\n"
             "- ZERO tekst kot. PRIORITETO 2025-2026.\n"
             "- MOS përdor frazën 'Nuk gjeta një përgjigje të saktë'.\n"
@@ -614,6 +857,9 @@ class RAGEngine:
                 # Keep rich bios (not just 1 thin snippet)
                 docs = hits[:5]
 
+        # Prefer canonical pages (e.g. /rektorati/) over meeting news
+        docs = _sort_docs_by_authority(docs, question, person_name=person_name)
+
         catalog_block = catalog_context_for_question(question)
 
         if not docs and not catalog_block:
@@ -688,23 +934,39 @@ class RAGEngine:
             ranked = self._semantic_rerank(question, chunks, top_k=TOP_K)
 
         relevant = ranked[: min(12 if wide else TOP_K, len(ranked))]
+
+        # Keep generation context on authoritative pages only
+        precise_urls = _pick_precise_sources(
+            question, relevant, docs, person_name=person_name, limit=4
+        )
+        if precise_urls:
+            precise_set = set(precise_urls)
+            filtered = [c for c in relevant if c.get("url") in precise_set]
+            if filtered:
+                relevant = filtered
+            docs_for_gen = [d for d in docs if d.get("url") in precise_set] or docs[:3]
+        else:
+            docs_for_gen = docs[:3]
+
         answer = self._generate(
             question,
             relevant,
-            source_docs=docs,
+            source_docs=docs_for_gen,
             search_hits=search_hits,
             catalog_block=catalog_block,
         )
 
-        sources: list[str] = []
-        for c in relevant:
-            if c.get("url") and c["url"] not in sources:
-                sources.append(c["url"])
-        for d in docs:
-            if d["url"] not in sources:
-                sources.append(d["url"])
+        sources = _pick_precise_sources(
+            question, relevant, docs_for_gen, person_name=person_name, limit=3
+        )
+        if not sources:
+            sources = [
+                d["url"]
+                for d in docs_for_gen
+                if d.get("url") and not _is_generic_source(d["url"])
+            ][:3]
 
-        result = {"answer": answer, "sources": sources[:12]}
+        result = {"answer": answer, "sources": sources}
         # Don't cache empty person lookups — allow retry after scrape improvements
         cacheable = "nuk gjeta një përgjigje" not in answer.lower()
         if cacheable and "nuk u gjet informacion publik" not in answer.lower():

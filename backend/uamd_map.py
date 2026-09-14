@@ -221,20 +221,38 @@ def extract_person_name(question: str) -> str:
                 flags=re.IGNORECASE,
             ).strip(" .?!,;:")
             if len(name) >= 3:
+                if _is_role_title(name):
+                    continue
                 return name
 
     # Fallback: 2+ consecutive capitalized / name-like tokens
     tokens = re.findall(r"[A-ZÇËÁÉÍÓÚ][a-zçëáéíóúë]+(?:\s+[A-ZÇË][a-zçëáéíóúë]+)+", q)
-    if tokens:
+    if tokens and not _is_role_title(tokens[0]):
         return tokens[0].strip()
 
     # lowercase fallback: last 2 non-stop words (edi puka)
     words = [w for w in re.findall(r"[A-Za-zÇçËë]{2,}", q) if w.lower() not in _STOP_WORDS]
     if len(words) >= 2:
-        return " ".join(words[-2:])
-    if len(words) == 1 and len(words[0]) >= 4:
+        cand = " ".join(words[-2:])
+        return "" if _is_role_title(cand) else cand
+    if len(words) == 1 and len(words[0]) >= 4 and not _is_role_title(words[0]):
         return words[0]
     return ""
+
+
+def _is_role_title(name: str) -> bool:
+    n = (name or "").lower().strip()
+    if not n:
+        return True
+    role_titles = {
+        "rektori", "rektor", "rektoresha", "dekani", "dekan",
+        "zv", "zëvendës", "lektor", "lektori", "lektorja",
+        "pedagog", "pedagogu", "profesor", "profesori",
+        "stafi", "personeli",
+    }
+    if n in role_titles:
+        return True
+    return n.startswith(("rektor", "dekan", "zv ", "zv.", "zëvendës"))
 
 
 def wants_person_lookup(question: str) -> bool:
