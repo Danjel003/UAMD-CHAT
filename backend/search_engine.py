@@ -383,9 +383,13 @@ def wp_site_search(query: str, max_results: int = MAX_RESULTS) -> list[dict[str,
     except Exception as exc:
         print(f"[search] WP REST error: {exc}")
 
+    # Skip slow HTML ?s= when REST already returned (speed)
+    if results:
+        return _dedupe(results, max_results)
+
     try:
         url = f"https://uamd.edu.al/?s={quote_plus(search_q)}"
-        resp = requests.get(url, timeout=8, headers={"User-Agent": USER_AGENT})
+        resp = requests.get(url, timeout=5, headers={"User-Agent": USER_AGENT})
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
         for a in soup.select(
@@ -483,9 +487,10 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
     person = wants_person_lookup(query)
     person_name = extract_person_name(query) if person else ""
     wide = wants_program_list(query) or wants_erasmus(query) or person
-    limit = 30 if person else (16 if wide else min(max(max_results, 8), 10))
+    # Keep URL sets tight for speed; person deep-dive happens in rag phase-2
+    limit = 10 if person else (12 if wide else min(max(max_results, 8), 8))
     specific: list[dict[str, Any]] = []
-    fallback = [_as_hit(h["url"], h["title"], provider="hub") for h in ALWAYS_HUBS[:5]]
+    fallback = [_as_hit(h["url"], h["title"], provider="hub") for h in ALWAYS_HUBS[:4]]
 
     deep_hits = [
         _as_hit(item["url"], item.get("title", ""), provider="deep")
@@ -527,7 +532,7 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
             wp_query = "Erasmus mobilitet studentor shkëmbim"
         elif person and person_name:
             wp_query = person_name
-        wp_hits = wp_site_search(wp_query, max_results=min(12, limit))
+        wp_hits = wp_site_search(wp_query, max_results=min(8, limit))
         if wp_hits:
             print(f"[search] wp_site_search → {len(wp_hits)}")
             specific.extend(wp_hits)
@@ -535,7 +540,8 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
         print(f"[search] wp_site_search failed: {exc}")
 
     strong = _dedupe(specific, limit)
-    if len(strong) >= 4 and not wants_erasmus(query) and not person:
+    # Person/Erasmus/programs: stop after WP — skip slow DDG/crawl (biggest latency win)
+    if len(strong) >= 3:
         results = _dedupe(strong + fallback, limit)
         print(f"[search] mid-path → {len(results)} urls")
         return results
@@ -557,7 +563,7 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
         if hits:
             print(f"[search] {provider.__name__} → {len(hits)}")
             specific.extend(hits)
-        if len(_dedupe(specific, limit)) >= limit and not person:
+        if len(_dedupe(specific, limit)) >= limit:
             break
 
     results = _dedupe(specific + fallback, limit)

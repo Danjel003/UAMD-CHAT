@@ -26,12 +26,12 @@ USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
-REQUEST_TIMEOUT = 8
-MAX_HTML_CHARS = 55_000
-MAX_PDF_CHARS = 24_000
-MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
+REQUEST_TIMEOUT = 6
+MAX_HTML_CHARS = 40_000
+MAX_PDF_CHARS = 16_000
+MAX_DOWNLOAD_BYTES = 6 * 1024 * 1024
 PAGE_CACHE_TTL = 3600  # 1 hour
-MAX_WORKERS = 8
+MAX_WORKERS = 10
 
 _page_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _cache_lock = threading.Lock()

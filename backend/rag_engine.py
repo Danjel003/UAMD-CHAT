@@ -23,6 +23,7 @@ from scraper import content_hash, fetch_many
 from search_engine import search_uamd
 from uamd_map import (
     catalog_context_for_question,
+    department_urls,
     extract_person_name,
     wants_erasmus,
     wants_person_lookup,
@@ -403,8 +404,8 @@ class RAGEngine:
             lines = [f"- {h.get('title') or 'UAMD'}: {h.get('url')}" for h in search_hits[:page_limit]]
             pages_block = "Rezultatet e kërkimit:\n" + "\n".join(lines) + "\n\n"
 
-        ctx_limit = 12 if deep_q else 5
-        ctx_chars = 1600 if is_person else (1400 if deep_q else 900)
+        ctx_limit = 8 if deep_q else 4
+        ctx_chars = 1200 if is_person else (1100 if deep_q else 800)
         context_block = "\n\n".join(
             f"[Burimi: {c.get('title') or 'UAMD'}] ({c.get('url')})\n{(c.get('content') or '')[:ctx_chars]}"
             for c in contexts[:ctx_limit]
@@ -511,7 +512,7 @@ class RAGEngine:
         person_name = extract_person_name(question) if is_person else ""
         wide = is_programs or is_erasmus or is_person
 
-        search_hits = search_uamd(question, max_results=20 if is_person else (16 if wide else max(TOP_K, 8)))
+        search_hits = search_uamd(question, max_results=10 if is_person else (12 if wide else max(TOP_K, 8)))
         if not search_hits:
             search_hits = [
                 {"url": "https://uamd.edu.al/", "title": "UAMD", "snippet": "", "provider": "fallback"}
@@ -519,33 +520,50 @@ class RAGEngine:
 
         urls = [h["url"] for h in search_hits]
         need_pdfs = wants_pdfs(question) or is_programs
-        expand = is_programs or is_person or any(
+        expand = is_programs or any(
             k in question.lower()
             for k in ("bachelor", "master", "dega", "deget", "fakultet")
         )
-        max_docs = 28 if is_person else (10 if wide else MAX_DOCS)
+        # Fast first fetch — person uses 2-phase (hubs first, departments only if needed)
+        max_docs = 6 if is_person else (8 if wide else MAX_DOCS)
         docs = fetch_many(
             urls,
             max_docs=max_docs,
             include_pdfs=need_pdfs,
-            expand_faculty=expand,
+            expand_faculty=expand and not is_person,
             prefer_name=person_name,
         )
 
-        # For person queries, prioritize docs that actually contain the name
-        if is_person and person_name and docs:
+        def _name_hit(doc: dict[str, Any]) -> int:
+            if not person_name:
+                return 0
             name_l = person_name.lower()
             parts = [p for p in name_l.split() if len(p) >= 3]
+            hay = f"{doc.get('title') or ''} {doc.get('text') or ''}".lower()
+            if name_l in hay:
+                return 2
+            if parts and all(p in hay for p in parts):
+                return 1
+            return 0
 
-            def _name_hit(doc: dict[str, Any]) -> int:
-                hay = f"{doc.get('title') or ''} {doc.get('text') or ''}".lower()
-                if name_l in hay:
-                    return 2
-                if parts and all(p in hay for p in parts):
-                    return 1
-                return 0
+        # Phase 2 (person only): scan department pages if name not found yet
+        if is_person and person_name and not any(_name_hit(d) for d in docs):
+            dept_urls = [d["url"] for d in department_urls()]
+            more = fetch_many(
+                dept_urls,
+                max_docs=18,
+                include_pdfs=False,
+                expand_faculty=False,
+                prefer_name=person_name,
+            )
+            docs.extend(more)
 
+        if is_person and person_name and docs:
             docs = sorted(docs, key=_name_hit, reverse=True)
+            # Keep only docs with the name + a couple of hubs for context
+            hits = [d for d in docs if _name_hit(d) > 0]
+            if hits:
+                docs = hits[:4]
 
         catalog_block = catalog_context_for_question(question)
 
@@ -561,9 +579,9 @@ class RAGEngine:
 
         if wide:
             chunks: list[dict[str, Any]] = []
-            for doc in docs:
+            docs_for_chunks = docs[:4] if is_person else docs
+            for doc in docs_for_chunks:
                 text = doc.get("text") or ""
-                # For person search, prefer a window around the name
                 if is_person and person_name:
                     low = text.lower()
                     idx = low.find(person_name.lower())
@@ -573,12 +591,12 @@ class RAGEngine:
                                 idx = low.find(p)
                                 break
                     if idx >= 0:
-                        start = max(0, idx - 400)
-                        end = min(len(text), idx + 1200)
+                        start = max(0, idx - 300)
+                        end = min(len(text), idx + 1000)
                         text = text[start:end]
                 lead = (
                     f"{doc.get('title') or ''}\n{doc.get('url') or ''}\n"
-                    f"{text[:1400]}"
+                    f"{text[:1100]}"
                 ).strip()
                 if len(lead) >= 40:
                     chunks.append(
@@ -589,8 +607,11 @@ class RAGEngine:
                             "title": doc.get("title") or doc["url"],
                         }
                     )
+                # Skip heavy chunking when we already have a person-name hit
+                if is_person and person_name and person_name.lower() in lead.lower():
+                    continue
                 for i, content in enumerate(
-                    simple_split(doc.get("text") or "", chunk_size=800, overlap=80)[:5]
+                    simple_split(doc.get("text") or "", chunk_size=700, overlap=60)[:3]
                 ):
                     if len(content.strip()) < 40:
                         continue

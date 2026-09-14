@@ -351,6 +351,19 @@ def wants_erasmus(question: str) -> bool:
     )
 
 
+def department_urls() -> list[dict[str, str]]:
+    """All faculty department pages (used for person deep-dive phase 2)."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for fac in FACULTIES:
+        for dep in fac.get("departments") or []:
+            if dep in seen:
+                continue
+            seen.add(dep)
+            out.append({"url": dep, "title": f"Departament — {fac['name']}", "provider": "deep"})
+    return out
+
+
 def format_program_catalog(fac: dict[str, Any]) -> str:
     programs = fac.get("programs") or []
     if not programs:
@@ -442,19 +455,11 @@ def deep_urls_for_question(question: str, limit: int = 12) -> list[dict[str, str
             urls.append({"url": hub["url"], "title": hub["title"], "provider": "deep"})
 
     if wants_person_lookup(question):
+        # Fast first: leadership/staff hubs only. Departments are fetched
+        # in a second phase by rag_engine if the name is not found yet.
         for hub in STAFF_HUBS:
             urls.append({"url": hub["url"], "title": hub["title"], "provider": "deep"})
-        # Lecturer bios live mainly on department pages (accordions)
-        for fac in FACULTIES:
-            for dep in fac.get("departments") or []:
-                urls.append(
-                    {
-                        "url": dep,
-                        "title": f"Departament — {fac['name']}",
-                        "provider": "deep",
-                    }
-                )
-            urls.append({"url": fac["url"], "title": fac["name"], "provider": "deep"})
+
 
     # Deduplicate preserving order
     seen = set()
