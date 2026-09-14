@@ -103,7 +103,7 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-def extract_name_snippets(html: str, name: str, window: int = 1800) -> str:
+def extract_name_snippets(html: str, name: str, window: int = 2800) -> str:
     """Pull plain-text windows around a person name from raw HTML (staff accordions)."""
     if not name or not html:
         return ""

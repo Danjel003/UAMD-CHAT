@@ -37,13 +37,13 @@ CACHE_FOLDER = Path(os.getenv("CACHE_FOLDER", BASE_DIR / "cache"))
 EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "local").lower()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-TOP_K = int(os.getenv("TOP_K", "5"))
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "600"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "60"))
-MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "3"))
-MAX_TOTAL_CHUNKS = int(os.getenv("MAX_TOTAL_CHUNKS", "15"))
+TOP_K = int(os.getenv("TOP_K", "8"))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "750"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "80"))
+MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "4"))
+MAX_TOTAL_CHUNKS = int(os.getenv("MAX_TOTAL_CHUNKS", "24"))
 MIN_SCORE = float(os.getenv("MIN_RELEVANCE_SCORE", "0.05"))
-MAX_DOCS = int(os.getenv("MAX_DOCS", "5"))
+MAX_DOCS = int(os.getenv("MAX_DOCS", "7"))
 USE_EMBEDDINGS = os.getenv("USE_EMBEDDINGS", "auto").lower()  # auto|always|never
 
 
@@ -54,15 +54,18 @@ NO_ANSWER = (
 
 SYSTEM_PROMPT = (
     "Ti je UAMD GPT, asistenti zyrtar informues i Universitetit 'Aleksandër Moisiu' Durrës. "
-    "Detyra jote: jep GJITHMONË një përgjigje të dobishme duke u bazuar në konteksting e faqeve zyrtare. "
+    "Detyra jote: jep përgjigje TË THELLA, TË DETAJUARA dhe BINDËSE duke u bazuar vetëm në burimet zyrtare. "
     "Rregulla:\n"
     "1) Përdor vetëm informacionin e kontekstit (uamd.edu.al / admissions).\n"
-    "2) Nëse nuk ke numrin/datën e saktë, jep informacionin më të afërt që ke + linkun zyrtar ku të vazhdohet.\n"
-    "3) MOS thuaj 'Nuk gjeta një përgjigje…' kur ke të paktën një fakt, listë, email, emër, link ose udhëzim.\n"
-    "4) Përgjigje të shkurtra, konkrete, në shqip.\n"
-    "5) Mos shpik fakte që nuk janë në kontekst.\n"
-    "6) Nëse pyetja është për Erasmus/mobilitet, MOS listo programe studimi të fakulteteve; "
-    "fokusohu te shkëmbimet, thirrjet, bursa dhe kontaketet e Drejtorisë së Projekteve."
+    "2) Mos jep përgjigje sipërfaqësore: nxirr sa më shumë fakte konkrete (emra, tituj, role, data, "
+    "programe, afate, kontakte, adresa, linke).\n"
+    "3) Strukturo përgjigjen qartë (paragrafë të shkurtër ose lista me pika) që të lexohet si informacion zyrtar.\n"
+    "4) Në fund përmend 1–2 burime zyrtare (link) që e mbështesin përgjigjen.\n"
+    "5) MOS thuaj 'Nuk gjeta një përgjigje…' kur ke të paktën një fakt, listë, email, emër, link ose udhëzim.\n"
+    "6) Mos shpik fakte që nuk janë në kontekst. Nëse mungon diçka, thuaj çfarë dihet dhe ku të verifikohet.\n"
+    "7) Nëse pyetja është për Erasmus/mobilitet, MOS listo programe studimi të fakulteteve; "
+    "fokusohu te shkëmbimet, thirrjet, bursa dhe kontaktet e Drejtorisë së Projekteve.\n"
+    "8) Shkruaj në shqip, ton profesional dhe bindës."
 )
 
 OUT_OF_SCOPE = (
@@ -396,7 +399,7 @@ class RAGEngine:
 
         pages_block = ""
         docs_for_list = source_docs or []
-        page_limit = 10 if deep_q else 5
+        page_limit = 10 if deep_q else 6
         if docs_for_list:
             lines = [f"- {d.get('title') or 'Faqe UAMD'}: {d.get('url')}" for d in docs_for_list[:page_limit]]
             pages_block = "Faqet zyrtare të gjetura:\n" + "\n".join(lines) + "\n\n"
@@ -404,8 +407,8 @@ class RAGEngine:
             lines = [f"- {h.get('title') or 'UAMD'}: {h.get('url')}" for h in search_hits[:page_limit]]
             pages_block = "Rezultatet e kërkimit:\n" + "\n".join(lines) + "\n\n"
 
-        ctx_limit = 8 if deep_q else 4
-        ctx_chars = 1200 if is_person else (1100 if deep_q else 800)
+        ctx_limit = 10 if deep_q else 6
+        ctx_chars = 2200 if is_person else (1800 if deep_q else 1200)
         context_block = "\n\n".join(
             f"[Burimi: {c.get('title') or 'UAMD'}] ({c.get('url')})\n{(c.get('content') or '')[:ctx_chars]}"
             for c in contexts[:ctx_limit]
@@ -419,37 +422,41 @@ class RAGEngine:
             )
 
         extra_rules = ""
-        max_tokens = 280
+        max_tokens = 520
         if is_programs:
-            max_tokens = 700
+            max_tokens = 850
             extra_rules = (
                 "- Pyetja kërkon LISTËN E PLOTË të programeve.\n"
                 "- Listo TË GJITHA programet: Bachelor, Master Shkencor, Master Profesional "
                 "dhe programet profesionale 2-vjeçare.\n"
                 "- MOS lër asnjë program jashtë nëse është në listën e plotë ose në kontekst.\n"
                 "- Organizoi përgjigjen në seksione sipas ciklit (Bachelor / Master / Profesional).\n"
-                "- Nuk vlen limiti i 6 fjalive për këtë pyetje; jep listën e plotë.\n"
+                "- Shto një fjali hyrëse dhe 1–2 linke zyrtare në fund.\n"
             )
         elif is_erasmus:
-            max_tokens = 650
+            max_tokens = 800
             extra_rules = (
-                "- Jep informacion SA MË TË PLOTË për Erasmus+ / mobilitetet studentore.\n"
-                "- Përmend: ku publikohen thirrjet, çfarë ofrohet (shkëmbime studentore, bursa, ICM), "
-                "ku të aplikojnë / kontaktojnë (Drejtoria e Projekteve dhe Marrëdhënieve me Jashtë), "
-                "dhe linke zyrtare.\n"
-                "- Nëse ke thirrje konkrete, përmend disa shembuj me afate/destinacione.\n"
-                "- Nuk vlen limiti i 6 fjalive; jep përmbledhje të plotë.\n"
+                "- Jep informacion SA MË TË PLOTË dhe BINDËS për Erasmus+ / mobilitetet.\n"
+                "- Përmend: ku publikohen thirrjet, çfarë ofrohet (shkëmbime, bursa, ICM), "
+                "dokumente tipike, kritere nëse janë, kontakte (Drejtoria e Projekteve), "
+                "dhe shembuj thirrjesh nëse i ke.\n"
+                "- Strukturo: Hyrje → Çfarë ofrohet → Si aplikohen → Kontakt/linke.\n"
             )
         elif is_person:
-            max_tokens = 550
+            max_tokens = 750
             who = person_name or "këtij personi"
             extra_rules = (
                 f"- Pyetja është për personin/lektorin: {who}.\n"
-                "- Nxirr nga konteksti çdo biografi / rol / titull / departament / fakultet që ekziston.\n"
-                "- Nëse emri gjendet, jep përmbledhje të plotë të informacionit publik.\n"
-                "- Nëse emri NUK gjendet në kontekst, thuaj qartë që nuk u gjet informacion publik "
-                "për këtë emër në faqen zyrtare dhe jep linkun e rektoratit/organikës.\n"
+                "- Jep biografi TË THELLË nga konteksti: titulli, roli aktual, fakulteti/departamenti, "
+                "formimi akademik, eksperienca, botime/libra nëse përmenden, pozicione të mëparshme.\n"
+                "- Mos jep vetëm 1–2 fjali; bëje të plotë dhe bindëse, por vetëm me fakte nga konteksti.\n"
+                "- Nëse emri NUK gjendet, thuaj qartë që nuk u gjet informacion publik dhe jep linke zyrtare.\n"
                 "- Mos invento biografi.\n"
+            )
+        else:
+            extra_rules = (
+                "- Jep përgjigje të thellë (zakonisht 1 paragraf + lista ose 6–10 fjali me fakte).\n"
+                "- Prefero detaje konkrete nga konteksti, jo përmbledhje të përgjithshme.\n"
             )
 
         user_prompt = (
@@ -458,17 +465,17 @@ class RAGEngine:
             f"Ekstrakte nga burimet zyrtare:\n\n{context_block}\n\n"
             f"Pyetja: {question}\n\n"
             "Udhëzime të detyrueshme:\n"
-            "- Jep gjithmonë një përgjigje të dobishme në shqip.\n"
-            "- Nxirr sa më shumë fakte relevante nga konteksti.\n"
-            "- Nëse mungon një detaj, thuaj çfarë dihet dhe jep linkun më të mirë zyrtar.\n"
+            "- Përgjigju në shqip, profesionalisht dhe bindshëm.\n"
+            "- Nxirr SA MË SHUMË fakte relevante nga konteksti (mos e bëj sipërfaqësore).\n"
+            "- Organizoi qartë (tituj të shkurtër ose lista kur ndihmon).\n"
+            "- Në fund jep 1–2 linke zyrtare.\n"
             "- MOS përdor frazën 'Nuk gjeta një përgjigje të saktë'.\n"
-            "- Për pyetje të zakonshme: maksimumi 6 fjali ose lista e shkurtër.\n"
             f"{extra_rules}"
         )
 
         response = self._openai.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            temperature=0,
+            temperature=0.2,
             max_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -524,8 +531,8 @@ class RAGEngine:
             k in question.lower()
             for k in ("bachelor", "master", "dega", "deget", "fakultet")
         )
-        # Fast first fetch — person uses 2-phase (hubs first, departments only if needed)
-        max_docs = 6 if is_person else (8 if wide else MAX_DOCS)
+        # Phase 1: enough pages for a convincing answer; phase 2 only if person missing
+        max_docs = 8 if is_person else (10 if wide else MAX_DOCS)
         docs = fetch_many(
             urls,
             max_docs=max_docs,
@@ -560,10 +567,10 @@ class RAGEngine:
 
         if is_person and person_name and docs:
             docs = sorted(docs, key=_name_hit, reverse=True)
-            # Keep only docs with the name + a couple of hubs for context
             hits = [d for d in docs if _name_hit(d) > 0]
             if hits:
-                docs = hits[:4]
+                # Keep rich bios (not just 1 thin snippet)
+                docs = hits[:5]
 
         catalog_block = catalog_context_for_question(question)
 
@@ -579,7 +586,7 @@ class RAGEngine:
 
         if wide:
             chunks: list[dict[str, Any]] = []
-            docs_for_chunks = docs[:4] if is_person else docs
+            docs_for_chunks = docs[:6] if is_person else docs
             for doc in docs_for_chunks:
                 text = doc.get("text") or ""
                 if is_person and person_name:
@@ -591,12 +598,13 @@ class RAGEngine:
                                 idx = low.find(p)
                                 break
                     if idx >= 0:
-                        start = max(0, idx - 300)
-                        end = min(len(text), idx + 1000)
+                        # Wider window = deeper biography
+                        start = max(0, idx - 500)
+                        end = min(len(text), idx + 2200)
                         text = text[start:end]
                 lead = (
                     f"{doc.get('title') or ''}\n{doc.get('url') or ''}\n"
-                    f"{text[:1100]}"
+                    f"{text[:2000]}"
                 ).strip()
                 if len(lead) >= 40:
                     chunks.append(
@@ -607,11 +615,8 @@ class RAGEngine:
                             "title": doc.get("title") or doc["url"],
                         }
                     )
-                # Skip heavy chunking when we already have a person-name hit
-                if is_person and person_name and person_name.lower() in lead.lower():
-                    continue
                 for i, content in enumerate(
-                    simple_split(doc.get("text") or "", chunk_size=700, overlap=60)[:3]
+                    simple_split(doc.get("text") or "", chunk_size=850, overlap=90)[:4]
                 ):
                     if len(content.strip()) < 40:
                         continue
