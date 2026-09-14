@@ -54,20 +54,17 @@ NO_ANSWER = (
 
 SYSTEM_PROMPT = (
     "Ti je UAMD GPT — asistent informues zyrtar i Universitetit 'Aleksandër Moisiu' Durrës.\n"
-    "Shkruaj përgjigje SPECIFIKE, TË SAKTA dhe TË BUKURA. Jo fjalë të kota.\n\n"
-    "Rregulla të forta:\n"
-    "1) Vetëm fakte nga konteksti (uamd.edu.al / admissions). Mos shpik asgjë.\n"
-    "2) Përgjigju DIREKT pyetjes: pa hyrje marketingu, pa fraza të përgjithshme "
-    "('Universiteti ofron mundësi…', 'është i rëndësishëm…', 'në botën e sotme…').\n"
-    "3) Çdo fjali duhet të ketë vlerë: emër, titull, rol, datë, afat, program, numër, kontakt ose link.\n"
-    "4) PRIORITETO informacionin më të ri (2025-2026). Në konflikt, zgjidh versionin e ri.\n"
-    "5) Format elegant në Markdown: titull i shkurtër ## kur duhet, lista me -, bold për emra/role kyçe. "
-    "Pa emoji. Pa përsëritje. Pa seksione bosh.\n"
-    "6) Gjatësia: sa duhet — e plotë, por e ngjeshur. Mos mbush me tekst për të dukur 'e gjatë'.\n"
-    "7) Në fund: seksion i shkurtër **Burime** me 1–2 linke zyrtare relevante.\n"
-    "8) Nëse mungon fakti, thuaj qartë çfarë dihet dhe ku të verifikohet — mos invento.\n"
-    "9) Erasmus/mobilitet → mos listo programe fakulteti; fokus te shkëmbimet/thirrjet/kontaktet.\n"
-    "10) Shqip i pastër, profesional, bindës."
+    "Shkruaj si komunikim INSTITUCIONAL: paragrafë të artikuluar, të saktë dhe të bukur.\n\n"
+    "Stil i detyrueshëm:\n"
+    "1) Vetëm tekst i rrjedhshëm në paragrafë. MOS përdor Markdown: as ##, as **, as *, as -, as lista me pika, as emoji.\n"
+    "2) Ton zyrtar, i qartë dhe profesional — si njoftim/informacion i universitetit.\n"
+    "3) Vetëm fakte nga konteksti. Mos shpik. Mos shkruaj 'nuk ka informacion për formimin/karrierën' si fusha boshe.\n"
+    "4) Përgjigju drejtpërdrejt pyetjes. Pa marketing dhe pa fraza të përgjithshme.\n"
+    "5) PRIORITETO informacionin më të ri (2025-2026). Në konflikt, zgjidh versionin e ri.\n"
+    "6) Për lista programesh: përmendi ato në fjali/paragrafë të ndara sipas ciklit, jo me shenja.\n"
+    "7) Mos shto seksion 'Burime' në tekst — burimet shfaqen veçmas.\n"
+    "8) Erasmus/mobilitet → mos listo programe fakulteti; fokus te shkëmbimet, thirrjet dhe kontaktet.\n"
+    "9) Shqip i pastër, i artikuluar, i saktë."
 )
 
 OUT_OF_SCOPE = (
@@ -167,14 +164,25 @@ _FLUFF_LINE = re.compile(
     r"|siç dihet.*"
     r"|në përfundim,.*"
     r"|shpresoj që kjo përgjigje.*"
+    r"|informacion(e|i)? të detajuara.*nuk janë të disponueshme.*"
+    r"|burime\s*:?\s*$"
     r")\s*$"
 )
 
 
 def _polish_answer(text: str) -> str:
-    """Trim fluff, collapse blank lines, keep clean markdown."""
+    """Institutional plain prose: strip markdown and fluff."""
     if not text:
         return ""
+    # Convert markdown links to plain label; drop trailing "Burime" URL dumps
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1", text)
+    text = re.sub(r"(?im)^\s*#{1,6}\s*", "", text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+    text = re.sub(r"(?m)^\s*[-•*]\s+", "", text)
+    text = re.sub(r"(?im)^\s*burime\s*:?\s*$", "", text)
+    text = re.sub(r"(?im)^\s*https?://\S+\s*$", "", text)
+
     lines: list[str] = []
     blank = 0
     for raw in text.splitlines():
@@ -460,36 +468,35 @@ class RAGEngine:
             )
 
         extra_rules = ""
-        max_tokens = 480
+        max_tokens = 550
         if is_programs:
-            max_tokens = 800
+            max_tokens = 850
             extra_rules = (
-                "- Jep LISTËN E PLOTË të programeve nga konteksti (Bachelor / Master / Profesional).\n"
-                "- Vetëm emrat e programeve + cikli; pa përshkrime marketingu.\n"
-                "- Organizim i pastër me ## për çdo cikël dhe - për çdo program.\n"
-                "- Një fjali hyrëse e shkurtër, pastaj lista. 1–2 linke në fund.\n"
+                "- Shkruaj në paragrafë institucionale: fillimisht fakulteti, pastaj ciklet.\n"
+                "- Për çdo cikël (Bachelor, Master Shkencor, Master Profesional, profesional 2-vjeçar) "
+                "një paragraf që liston programet me emra të plotë, të ndara me presje.\n"
+                "- Pa shenja Markdown dhe pa lista me pika.\n"
             )
         elif is_erasmus:
-            max_tokens = 700
+            max_tokens = 750
             extra_rules = (
-                "- Vetëm fakte për Erasmus+/mobilitet: thirrje, afate, dokumente, kritere, kontakt.\n"
-                "- Struktura: ## Çfarë ofrohet → ## Si aplikohen → ## Kontakt → **Burime**.\n"
-                "- Pa fjalë të përgjithshme për 'rëndësinë e shkëmbimeve'.\n"
+                "- Paragrafë të qartë për Erasmus+/mobilitet: çfarë ofrohet, si aplikohen, kontakte.\n"
+                "- Pa Markdown. Vetëm tekst i rrjedhshëm zyrtar.\n"
             )
         elif is_person:
-            max_tokens = 700
+            max_tokens = 650
             who = person_name or "këtij personi"
             extra_rules = (
-                f"- Fokus vetëm te {who}: titull, rol aktual, njësi, formim, karrierë — nga konteksti.\n"
-                "- Format: ## Emri → lista me fakte → **Burime**.\n"
-                "- Pa biografi të shpikur dhe pa fjali dekorative.\n"
-                "- Nëse emri nuk gjendet: thuaj qartë + jep 1–2 linke zyrtare.\n"
+                f"- Shkruaj një biografi të shkurtër zyrtare për {who} në 1–3 paragrafë.\n"
+                "- Përfshi vetëm faktet e gjetura (titull, rol, njësi, aktivitet). "
+                "Mos krijo fusha boshe për formim/karrierë nëse nuk i ke.\n"
+                "- Shembull stili: «Prof. Dr. … është Rektor i Universitetit … . Në këtë rol … .»\n"
+                "- Pa Markdown, pa lista, pa yje, pa thurje.\n"
             )
         else:
             extra_rules = (
-                "- Përgjigje e ngjeshur dhe specifike: 1 hyrje e shkurtër + lista/fakte.\n"
-                "- Çdo pikë = fakt i verifikueshëm nga konteksti.\n"
-                "- Hiq çdo fjali që nuk përgjigjet drejtpërdrejt pyetjes.\n"
+                "- 1–3 paragrafë të artikuluar që përgjigjen saktësisht pyetjes.\n"
+                "- Pa Markdown dhe pa lista me shenja.\n"
             )
 
         user_prompt = (
@@ -498,18 +505,16 @@ class RAGEngine:
             f"Ekstrakte nga burimet zyrtare:\n\n{context_block}\n\n"
             f"Pyetja: {question}\n\n"
             "Udhëzime të detyrueshme:\n"
-            "- Përgjigju NË SHQIP, saktësisht asaj që pyetet.\n"
-            "- SPECIFIK + I SAKTË + I BUKUR (Markdown i pastër).\n"
-            "- ZERO tekst kot: pa marketing, pa përsëritje, pa 'mbushje'.\n"
-            "- PRIORITETO 2025-2026; mos përfshi fakte të vjetruara.\n"
-            "- Në fund: **Burime** me 1–2 linke.\n"
+            "- Përgjigju NË SHQIP, në stil INSTITUCIONAL, me PARAGRAFË të bukur dhe të saktë.\n"
+            "- MOS përdor ##, **, *, - , lista, emoji ose seksion Burime.\n"
+            "- ZERO tekst kot. PRIORITETO 2025-2026.\n"
             "- MOS përdor frazën 'Nuk gjeta një përgjigje të saktë'.\n"
             f"{extra_rules}"
         )
 
         response = self._openai.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            temperature=0.1,
+            temperature=0.25,
             max_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -520,7 +525,7 @@ class RAGEngine:
         answer = _polish_answer(answer)
         if (not answer) or ("nuk gjeta një përgjigje" in answer.lower()):
             if catalog_block:
-                return catalog_block + "\n\nBurime: https://uamd.edu.al/"
+                return _polish_answer(catalog_block)
             return self._fallback_from_docs(question, docs_for_list or [], search_hits or [])
         return answer
 

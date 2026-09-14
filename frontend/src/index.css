@@ -115,11 +115,13 @@
 
 .answer-prose {
   white-space: pre-wrap;
-  line-height: 1.7;
+  line-height: 1.85;
   font-size: 1.05rem;
   color: #1a2744;
+  letter-spacing: 0.01em;
 }
 
 .answer-prose strong {
   color: #0a1f3d;
+  font-weight: 600;
 }
