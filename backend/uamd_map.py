@@ -444,11 +444,17 @@ def deep_urls_for_question(question: str, limit: int = 12) -> list[dict[str, str
     if wants_person_lookup(question):
         for hub in STAFF_HUBS:
             urls.append({"url": hub["url"], "title": hub["title"], "provider": "deep"})
-        # Staff bios live on department pages — pull them when looking up a person
+        # Lecturer bios live mainly on department pages (accordions)
         for fac in FACULTIES:
-            urls.append({"url": fac["url"], "title": fac["name"], "provider": "deep"})
             for dep in fac.get("departments") or []:
-                urls.append({"url": dep, "title": f"Departament — {fac['name']}", "provider": "deep"})
+                urls.append(
+                    {
+                        "url": dep,
+                        "title": f"Departament — {fac['name']}",
+                        "provider": "deep",
+                    }
+                )
+            urls.append({"url": fac["url"], "title": fac["name"], "provider": "deep"})
 
     # Deduplicate preserving order
     seen = set()

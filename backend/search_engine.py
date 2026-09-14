@@ -483,7 +483,7 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
     person = wants_person_lookup(query)
     person_name = extract_person_name(query) if person else ""
     wide = wants_program_list(query) or wants_erasmus(query) or person
-    limit = 20 if person else (16 if wide else min(max(max_results, 8), 10))
+    limit = 30 if person else (16 if wide else min(max(max_results, 8), 10))
     specific: list[dict[str, Any]] = []
     fallback = [_as_hit(h["url"], h["title"], provider="hub") for h in ALWAYS_HUBS[:5]]
 

@@ -523,7 +523,7 @@ class RAGEngine:
             k in question.lower()
             for k in ("bachelor", "master", "dega", "deget", "fakultet")
         )
-        max_docs = 12 if is_person else (10 if wide else MAX_DOCS)
+        max_docs = 28 if is_person else (10 if wide else MAX_DOCS)
         docs = fetch_many(
             urls,
             max_docs=max_docs,
