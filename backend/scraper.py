@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import re
 import threading
 import time
@@ -30,7 +31,7 @@ REQUEST_TIMEOUT = 6
 MAX_HTML_CHARS = 40_000
 MAX_PDF_CHARS = 16_000
 MAX_DOWNLOAD_BYTES = 6 * 1024 * 1024
-PAGE_CACHE_TTL = 3600  # 1 hour
+PAGE_CACHE_TTL = int(os.getenv("PAGE_CACHE_TTL", "180"))  # seconds; keep short for freshness
 MAX_WORKERS = 10
 
 _page_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -92,6 +93,8 @@ def _session() -> requests.Session:
             "User-Agent": USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/pdf,*/*;q=0.8",
             "Accept-Language": "sq,en;q=0.8",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
         }
     )
     return s
@@ -465,6 +468,7 @@ def fetch_many(
     include_pdfs: bool = False,
     expand_faculty: bool = False,
     prefer_name: str = "",
+    use_cache: bool = True,
 ) -> list[dict[str, Any]]:
     """Fetch unique official URLs in parallel (optional faculty expansion)."""
     from uamd_map import FACULTIES
@@ -485,7 +489,7 @@ def fetch_many(
 
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(pending))) as pool:
         futures = {
-            pool.submit(fetch_url, url, True, prefer_name): url for url in pending
+            pool.submit(fetch_url, url, use_cache, prefer_name): url for url in pending
         }
         for fut in as_completed(futures):
             doc = fut.result()
@@ -535,7 +539,9 @@ def fetch_many(
     extra = extra[: max(0, 12)]
     if extra:
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(extra))) as pool:
-            for fut in as_completed({pool.submit(fetch_url, u): u for u in extra}):
+            for fut in as_completed(
+                {pool.submit(fetch_url, u, use_cache, prefer_name): u for u in extra}
+            ):
                 doc = fut.result()
                 if doc.get("ok") and doc.get("text"):
                     results.append(doc)

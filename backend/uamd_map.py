@@ -7,6 +7,7 @@ Copyright (c) 2026 Danjel Kalari. All rights reserved.
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -90,9 +91,7 @@ FACULTIES: list[dict[str, Any]] = [
             "https://uamd.edu.al/departamenti-i-shkencave-te-aplikuara-dhe-te-natyres/",
             "https://uamd.edu.al/departamenti-i-studimeve-te-integruara-me-praktiken/",
         ],
-        "files": [
-            "https://uamd.edu.al/wp-content/uploads/2024/04/FSP.xlsx",
-        ],
+        "files": [],
         "programs": [],
     },
     {
@@ -116,9 +115,7 @@ FACULTIES: list[dict[str, Any]] = [
             "https://uamd.edu.al/departamenti-i-shkencave-politike/",
             "https://uamd.edu.al/departamenti-i-administrimit-publik/",
         ],
-        "files": [
-            "https://uamd.edu.al/wp-content/uploads/2024/04/FSHPJ.xlsx",
-        ],
+        "files": [],
         "programs": [],
     },
     {
@@ -141,10 +138,8 @@ FACULTIES: list[dict[str, Any]] = [
             "https://uamd.edu.al/departamenti-i-shkencave-kompjuterike/",
             "https://uamd.edu.al/departamenti-i-matematikes/",
         ],
-        "files": [
-            "https://uamd.edu.al/wp-content/uploads/2024/04/FTI.xlsx",
-        ],
-        # Curated from official department pages (complete list for answers)
+        "files": [],
+        # Optional fallback only (USE_CURATED_CATALOG=1). Prefer live faculty pages.
         "programs": [
             {"cycle": "Bachelor", "name": "Teknologji Informacioni", "dept": "Departamenti i Teknologjisë së Informacionit"},
             {"cycle": "Bachelor", "name": "Multimedia dhe Televizion Digjital", "dept": "Departamenti i Teknologjisë së Informacionit"},
@@ -399,7 +394,9 @@ def format_program_catalog(fac: dict[str, Any]) -> str:
 
 
 def catalog_context_for_question(question: str) -> str:
-    """Inject curated full program lists when user asks about programs."""
+    """Optional curated program lists — OFF by default so live pages win."""
+    if os.getenv("USE_CURATED_CATALOG", "0").strip() != "1":
+        return ""
     if not wants_program_list(question):
         return ""
     matched = match_faculties(question)

@@ -53,7 +53,7 @@ INTENT_SEEDS: list[tuple[list[str], list[dict[str, str]]]] = [
         [
             {"url": "https://uamd.edu.al/fakulteti-i-teknologjise-se-informacionit/", "title": "Fakulteti i Teknologjisë së Informacionit (FTI)"},
             {"url": "https://uamd.edu.al/departamenti-i-teknologjise-se-informacionit/", "title": "Departamenti i Teknologjisë së Informacionit"},
-            {"url": "https://uamd.edu.al/wp-content/uploads/2024/04/FTI.xlsx", "title": "Programet e studimit FTI (tabelë zyrtare)"},
+            {"url": "https://uamd.edu.al/departamenti-i-shkencave-kompjuterike/", "title": "Departamenti i Shkencave Kompjuterike"},
             {"url": "https://uamd.edu.al/fakulteti-i-biznesit/", "title": "Fakulteti i Biznesit"},
             {"url": "https://uamd.edu.al/fakulteti-i-edukimit/", "title": "Fakulteti i Edukimit"},
         ],
@@ -168,7 +168,7 @@ INTENT_SEEDS: list[tuple[list[str], list[dict[str, str]]]] = [
 
 _home_cache: dict[str, Any] = {"ts": 0.0, "candidates": []}
 _home_lock = threading.Lock()
-HOME_CACHE_TTL = 1800
+HOME_CACHE_TTL = int(os.getenv("HOME_CACHE_TTL", "300"))
 
 
 def _as_hit(url: str, title: str = "", snippet: str = "", provider: str = "seed") -> dict[str, Any]:
@@ -343,8 +343,37 @@ def search_duckduckgo(query: str, max_results: int = MAX_RESULTS) -> list[dict[s
         return []
 
 
+def _freshness_score(url: str) -> int:
+    """Prefer current academic-year pages; demote old upload paths."""
+    u = (url or "").lower()
+    score = 0
+    if "2026" in u:
+        score += 40
+    if "2025" in u:
+        score += 30
+    if "2024" in u:
+        score += 5
+    if "2023" in u or "2022" in u:
+        score -= 15
+    if "/wp-content/uploads/" in u and ("2024" in u or "2023" in u):
+        score -= 25
+    return score
+
+
+def _prefer_fresh(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    ranked = sorted(
+        results,
+        key=lambda item: (
+            _freshness_score(item.get("url") or ""),
+            1 if (item.get("provider") or "").startswith("wp") else 0,
+        ),
+        reverse=True,
+    )
+    return _dedupe(ranked, limit)
+
+
 def wp_site_search(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, Any]]:
-    """Use the university WordPress search endpoint (+ REST API)."""
+    """Use the university WordPress search endpoint (+ REST API), newest first."""
     results: list[dict[str, Any]] = []
     # Keep short name tokens (Edi, Ana, …) — critical for lecturer lookup
     tokens = [
@@ -360,36 +389,65 @@ def wp_site_search(query: str, max_results: int = MAX_RESULTS) -> list[dict[str,
         }
     ]
     search_q = " ".join(tokens[:6]) if tokens else query.strip()
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+
+    def _append_rest_row(row: dict[str, Any], provider: str) -> None:
+        href = row.get("url") or row.get("link")
+        if not href:
+            return
+        title = row.get("title") or ""
+        if isinstance(title, dict):
+            title = title.get("rendered") or ""
+        results.append(
+            {
+                "url": href,
+                "title": BeautifulSoup(str(title), "lxml").get_text(" ", strip=True),
+                "snippet": "",
+                "provider": provider,
+            }
+        )
 
     try:
-        api = f"https://uamd.edu.al/wp-json/wp/v2/search?search={quote_plus(search_q)}&per_page={max_results}"
-        resp = requests.get(api, timeout=6, headers={"User-Agent": USER_AGENT})
+        api = (
+            f"https://uamd.edu.al/wp-json/wp/v2/search?"
+            f"search={quote_plus(search_q)}&per_page={max_results}"
+        )
+        resp = requests.get(api, timeout=6, headers=headers)
         if resp.status_code < 400:
             for row in resp.json() or []:
-                href = row.get("url")
-                if not href:
-                    continue
-                title = row.get("title") or ""
-                if isinstance(title, dict):
-                    title = title.get("rendered") or ""
-                results.append(
-                    {
-                        "url": href,
-                        "title": BeautifulSoup(str(title), "lxml").get_text(" ", strip=True),
-                        "snippet": "",
-                        "provider": "wp_rest",
-                    }
-                )
+                _append_rest_row(row, "wp_rest")
     except Exception as exc:
         print(f"[search] WP REST error: {exc}")
 
-    # Skip slow HTML ?s= when REST already returned (speed)
+    # Prefer recently modified pages/posts for freshness
+    for endpoint, provider in (
+        ("posts", "wp_posts"),
+        ("pages", "wp_pages"),
+    ):
+        try:
+            order_by = "date" if endpoint == "posts" else "modified"
+            api = (
+                f"https://uamd.edu.al/wp-json/wp/v2/{endpoint}?"
+                f"search={quote_plus(search_q)}&per_page={max_results}"
+                f"&orderby={order_by}&order=desc"
+            )
+            resp = requests.get(api, timeout=6, headers=headers)
+            if resp.status_code < 400:
+                for row in resp.json() or []:
+                    _append_rest_row(row, provider)
+        except Exception as exc:
+            print(f"[search] WP {endpoint} error: {exc}")
+
     if results:
-        return _dedupe(results, max_results)
+        return _prefer_fresh(results, max_results)
 
     try:
         url = f"https://uamd.edu.al/?s={quote_plus(search_q)}"
-        resp = requests.get(url, timeout=5, headers={"User-Agent": USER_AGENT})
+        resp = requests.get(url, timeout=5, headers=headers)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
         for a in soup.select(
@@ -410,7 +468,7 @@ def wp_site_search(query: str, max_results: int = MAX_RESULTS) -> list[dict[str,
     except Exception as exc:
         print(f"[search] WP search error: {exc}")
 
-    return _dedupe(results, max_results)
+    return _prefer_fresh(results, max_results)
 
 
 def _load_home_candidates() -> list[dict[str, Any]]:
@@ -471,7 +529,7 @@ def crawl_uamd_site(query: str, max_results: int = MAX_RESULTS) -> list[dict[str
 def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, Any]]:
     """
     Hybrid search on uamd.edu.al.
-    Super-search for person/lecturer names: staff hubs + WP name search + DDG.
+    Always queries live WordPress first so answers prefer current official pages.
     """
     from uamd_map import (
         extract_person_name,
@@ -491,6 +549,22 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
     limit = 10 if person else (12 if wide else min(max(max_results, 8), 8))
     specific: list[dict[str, Any]] = []
     fallback = [_as_hit(h["url"], h["title"], provider="hub") for h in ALWAYS_HUBS[:4]]
+
+    # Live WP first — avoid answering only from static seed maps
+    try:
+        wp_query = query
+        if wants_erasmus(query):
+            wp_query = "Erasmus mobilitet studentor shkëmbim"
+        elif person and person_name:
+            wp_query = person_name
+        elif wants_program_list(query):
+            wp_query = f"{query} 2025 2026 program studimi"
+        wp_hits = wp_site_search(wp_query, max_results=min(8, limit))
+        if wp_hits:
+            print(f"[search] wp_site_search → {len(wp_hits)}")
+            specific.extend(wp_hits)
+    except Exception as exc:
+        print(f"[search] wp_site_search failed: {exc}")
 
     deep_hits = [
         _as_hit(item["url"], item.get("title", ""), provider="deep")
@@ -520,29 +594,10 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
         ):
             specific.append(_as_hit(seed[0], seed[1], provider="intent"))
 
-    strong = _dedupe(specific, limit)
-    if len(strong) >= 4 and (deep_hits or intent_hits) and not wide:
-        results = _dedupe(strong + fallback, limit)
-        print(f"[search] fast-path → {len(results)} urls")
-        return results
-
-    try:
-        wp_query = query
-        if wants_erasmus(query):
-            wp_query = "Erasmus mobilitet studentor shkëmbim"
-        elif person and person_name:
-            wp_query = person_name
-        wp_hits = wp_site_search(wp_query, max_results=min(8, limit))
-        if wp_hits:
-            print(f"[search] wp_site_search → {len(wp_hits)}")
-            specific.extend(wp_hits)
-    except Exception as exc:
-        print(f"[search] wp_site_search failed: {exc}")
-
-    strong = _dedupe(specific, limit)
-    # Person/Erasmus/programs: stop after WP — skip slow DDG/crawl (biggest latency win)
+    strong = _prefer_fresh(specific, limit)
+    # Person/Erasmus/programs: stop after WP+map — skip slow DDG/crawl
     if len(strong) >= 3:
-        results = _dedupe(strong + fallback, limit)
+        results = _prefer_fresh(strong + fallback, limit)
         print(f"[search] mid-path → {len(results)} urls")
         return results
 
@@ -566,7 +621,7 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
         if len(_dedupe(specific, limit)) >= limit:
             break
 
-    results = _dedupe(specific + fallback, limit)
+    results = _prefer_fresh(specific + fallback, limit)
     if not results:
         results = _dedupe([_as_hit(u, "UAMD", provider="seed") for u in SEED_URLS], limit)
     print(

@@ -10,6 +10,12 @@ services:
         value: openai
       - key: FLASK_DEBUG
         value: "false"
+      - key: QUERY_CACHE_TTL
+        value: "120"
+      - key: PAGE_CACHE_TTL
+        value: "180"
+      - key: USE_CURATED_CATALOG
+        value: "0"
       - key: OPENAI_API_KEY
         sync: false
       - key: TAVILY_API_KEY

@@ -57,15 +57,18 @@ SYSTEM_PROMPT = (
     "Detyra jote: jep përgjigje TË THELLA, TË DETAJUARA dhe BINDËSE duke u bazuar vetëm në burimet zyrtare. "
     "Rregulla:\n"
     "1) Përdor vetëm informacionin e kontekstit (uamd.edu.al / admissions).\n"
-    "2) Mos jep përgjigje sipërfaqësore: nxirr sa më shumë fakte konkrete (emra, tituj, role, data, "
+    "2) PRIORITETO informacionin MË TË RI: vitin akademik aktual (2025-2026), datat më të fundit, "
+    "njoftimet e reja. Nëse ka konflikt midis burimeve, zgjidh versionin më të ri dhe mos përsërit "
+    "fakte të vjetruara (p.sh. lista/dokumente 2023-2024 kur ka 2025-2026).\n"
+    "3) Mos jep përgjigje sipërfaqësore: nxirr sa më shumë fakte konkrete (emra, tituj, role, data, "
     "programe, afate, kontakte, adresa, linke).\n"
-    "3) Strukturo përgjigjen qartë (paragrafë të shkurtër ose lista me pika) që të lexohet si informacion zyrtar.\n"
-    "4) Në fund përmend 1–2 burime zyrtare (link) që e mbështesin përgjigjen.\n"
-    "5) MOS thuaj 'Nuk gjeta një përgjigje…' kur ke të paktën një fakt, listë, email, emër, link ose udhëzim.\n"
-    "6) Mos shpik fakte që nuk janë në kontekst. Nëse mungon diçka, thuaj çfarë dihet dhe ku të verifikohet.\n"
-    "7) Nëse pyetja është për Erasmus/mobilitet, MOS listo programe studimi të fakulteteve; "
+    "4) Strukturo përgjigjen qartë (paragrafë të shkurtër ose lista me pika) që të lexohet si informacion zyrtar.\n"
+    "5) Në fund përmend 1–2 burime zyrtare (link) që e mbështesin përgjigjen — prefero linke me vit aktual.\n"
+    "6) MOS thuaj 'Nuk gjeta një përgjigje…' kur ke të paktën një fakt, listë, email, emër, link ose udhëzim.\n"
+    "7) Mos shpik fakte që nuk janë në kontekst. Nëse mungon diçka, thuaj çfarë dihet dhe ku të verifikohet.\n"
+    "8) Nëse pyetja është për Erasmus/mobilitet, MOS listo programe studimi të fakulteteve; "
     "fokusohu te shkëmbimet, thirrjet, bursa dhe kontaktet e Drejtorisë së Projekteve.\n"
-    "8) Shkruaj në shqip, ton profesional dhe bindës."
+    "9) Shkruaj në shqip, ton profesional dhe bindës."
 )
 
 OUT_OF_SCOPE = (
@@ -210,7 +213,7 @@ class RAGEngine:
         self._openai = None
         self._ready = False
         self._query_cache: dict[str, dict[str, Any]] = {}
-        self._cache_ttl = int(os.getenv("QUERY_CACHE_TTL", "1800"))
+        self._cache_ttl = int(os.getenv("QUERY_CACHE_TTL", "120"))
         self._embed_cache: dict[str, np.ndarray] = {}
         self._embed_cache_lock = threading.Lock()
 
@@ -417,7 +420,8 @@ class RAGEngine:
         catalog_section = ""
         if catalog_block:
             catalog_section = (
-                "LISTA E PLOTË E PROGRAMEVE (nga burimet zyrtare të fakultetit — përdore detyrimisht):\n"
+                "LISTË NDIHMËSE PROGRAMESH (përdore vetëm nëse mungon në faqet live; "
+                "në konflikt, ZGJIDH faqet e reja zyrtare):\n"
                 f"{catalog_block}\n\n"
             )
 
@@ -466,6 +470,7 @@ class RAGEngine:
             f"Pyetja: {question}\n\n"
             "Udhëzime të detyrueshme:\n"
             "- Përgjigju në shqip, profesionalisht dhe bindshëm.\n"
+            "- PRIORITETO informacionin më të ri (2025-2026); mos përsërit fakte të vjetruara.\n"
             "- Nxirr SA MË SHUMË fakte relevante nga konteksti (mos e bëj sipërfaqësore).\n"
             "- Organizoi qartë (tituj të shkurtër ose lista kur ndihmon).\n"
             "- Në fund jep 1–2 linke zyrtare.\n"
@@ -539,6 +544,7 @@ class RAGEngine:
             include_pdfs=need_pdfs,
             expand_faculty=expand and not is_person,
             prefer_name=person_name,
+            use_cache=False,
         )
 
         def _name_hit(doc: dict[str, Any]) -> int:
@@ -562,6 +568,7 @@ class RAGEngine:
                 include_pdfs=False,
                 expand_faculty=False,
                 prefer_name=person_name,
+                use_cache=False,
             )
             docs.extend(more)
 
