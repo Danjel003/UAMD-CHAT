@@ -103,6 +103,47 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
+def extract_name_snippets(html: str, name: str, window: int = 1800) -> str:
+    """Pull plain-text windows around a person name from raw HTML (staff accordions)."""
+    if not name or not html:
+        return ""
+    text = re.sub(r"(?is)<(script|style|noscript).*?>.*?</\1>", " ", html)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</(p|div|h\d|li|tr)>", "\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = clean_text(html_unescape(text) if False else text)
+    # basic entities
+    text = (
+        text.replace("&nbsp;", " ")
+        .replace("&#8220;", '"')
+        .replace("&#8221;", '"')
+        .replace("&amp;", "&")
+    )
+    text = clean_text(text)
+    low = text.lower()
+    needles = [name.lower().strip()]
+    needles.extend(p for p in name.lower().split() if len(p) >= 4)
+    snippets: list[str] = []
+    for needle in needles:
+        if not needle:
+            continue
+        start = 0
+        while len(snippets) < 4:
+            idx = low.find(needle, start)
+            if idx < 0:
+                break
+            left = max(0, idx - 250)
+            right = min(len(text), idx + window)
+            snip = text[left:right].strip()
+            if len(snip) >= 60:
+                snippets.append(snip)
+            start = idx + len(needle)
+        if snippets:
+            break
+    # dedupe while preserving order
+    return "\n\n---\n\n".join(dict.fromkeys(snippets))
+
+
 def extract_html_text(html: str, base_url: str, prefer_name: str = "") -> dict[str, Any]:
     soup = BeautifulSoup(html, "lxml")
 
@@ -184,6 +225,13 @@ def extract_html_text(html: str, base_url: str, prefer_name: str = "") -> dict[s
             extras.append("Informacion nga footer:\n" + short_footer[:1200])
     if extras:
         text = (text + "\n\n" + "\n\n".join(extras)).strip()
+
+    # Always merge raw name windows for lecturer/staff lookups
+    if prefer_name:
+        snips = extract_name_snippets(html, prefer_name)
+        if snips:
+            text = (snips + "\n\n" + text).strip() if text else snips
+
     if len(text) > MAX_HTML_CHARS:
         if prefer_name:
             low = text.lower()
