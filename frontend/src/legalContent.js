@@ -50,106 +50,132 @@ Zhvilluar nga **Drejtoria e IT-së, Sektori i Inovacionit dhe Software-it** pran
     id: 'privacy',
     title: 'Politika e Privatësisë',
     body: `
-## 1. Hyrje
+## Statusi i shërbimit (i rëndësishëm)
 
-Kjo Politikë e Privatësisë shpjegon se si **UAMD GPT** trajton informacionin kur përdorni chatbot-in.  
-Duke përdorur UAMD GPT, ju pranoni këtë politikë.
+**UAMD GPT është aktualisht në fazë testimi dhe zhvillimi.**  
+Kjo do të thotë se:
+- funksionaliteti, cilësia e përgjigjeve dhe mënyra e përpunimit mund të ndryshojnë;
+- shërbimi nuk është ende një sistem i finalizuar prodhimi;
+- kjo Politikë e Privatësisë mund të përditësohet gjatë testimit.
 
-## 2. Kush jemi
+Duke përdorur UAMD GPT në këtë fazë, ju pranoni këtë politikë.
 
-UAMD GPT është një shërbim informues i Universitetit “Aleksandër Moisiu” Durrës, zhvilluar nga Drejtoria e IT-së / Sektori i Inovacionit dhe Software-it.
+## 1. Qëllimi i kësaj politike
 
-## 3. Çfarë të dhënash përpunohen
+Kjo faqe shpjegon **në mënyrë të thjeshtë**:
+- çfarë informacioni mund të përpunohet kur përdorni chatbot-in;
+- ku shkon ky informacion;
+- çfarë **nuk** ruajmë;
+- çfarë duhet të shmangni në pyetje.
 
-### 3.1 Të dhëna që ju jepni
-- Teksti i pyetjes që shkruani në chatbot.
-- Nëse kontaktoni me email, adresa dhe përmbajtja e mesazhit tuaj.
+## 2. Kush e ofron shërbimin
 
-### 3.2 Të dhëna teknike
-Gjatë përdorimit mund të përpunohen automatikisht:
-- adresa IP;
-- lloji i shfletuesit / pajisjes;
-- data dhe ora e kërkesës;
+UAMD GPT është një chatbot informues i Universitetit “Aleksandër Moisiu” Durrës,  
+zhvilluar nga **Drejtoria e IT-së / Sektori i Inovacionit dhe Software-it**.
+
+**Autor i softuerit:** Danjel Kalari
+
+## 3. Parimi ynë kryesor
+
+**Nuk krijojmë profile personale të studentëve dhe nuk mbledhim dosje private** (nota, amza, llogari, etj.).
+
+UAMD GPT është bërë për informacion **publik** nga burime zyrtare (kryesisht uamd.edu.al), jo për të dhëna personale.
+
+## 4. Çfarë të dhënash përpunohen
+
+### 4.1 Çfarë shkruani ju
+- Teksti i pyetjes në chat.
+- Nëse na shkruani me email, adresa e emailit dhe përmbajtja e mesazhit.
+
+**Historia e bisedës nuk ruhet në një bazë të dhënash të përhershme të UAMD GPT.**  
+Ajo mbetet zakonisht vetëm në shfletuesin tuaj derisa të mbyllni ose rifreskoni faqen.
+
+### 4.2 Të dhëna teknike (automatike të hosting-ut)
+
+Kur hapni faqen ose dërgoni një pyetje, **ofruesit e hosting-ut** (si Vercel / Render) mund të shohin automatikisht, si çdo faqe web:
+
+- adresën IP;
+- llojin e shfletuesit / pajisjes;
+- datën dhe orën e kërkesës;
 - të dhëna bazë të serverit për funksionim dhe siguri.
 
-### 3.3 Çfarë NUK duhet të dërgoni
+**E rëndësishme:**  
+Aplikacioni UAMD GPT **nuk i mbledh këto të dhëna në një databazë të vetën** për marketing apo profilizim.  
+Ato mund të shfaqen përkohësisht në **logje teknike** të infrastrukturës, për mirëmbajtje dhe mbrojtje nga abuzimi.
+
+### 4.3 Çfarë NUK duhet të dërgoni kurrë
+
 **Mos vendosni të dhëna personale ose të ndjeshme**, si:
 - nota, amza, numër studenti, fjalëkalime;
 - numër personal / NID, dokumente identiteti;
 - të dhëna shëndetësore, financiare apo të tretëve;
 - çdo informacion privat që nuk është publik në faqen zyrtare.
 
-UAMD GPT **nuk është projektuar** për të mbledhur apo ruajtur dosje personale të studentëve.
+Nëse i vendosni, e bëni me përgjegjësinë tuaj. Shërbimi **nuk është projektuar** për t’i ruajtur ato.
 
-## 4. Qëllimi i përpunimit
+## 5. Pse përpunohen të dhënat
 
-Të dhënat përpunohen për:
+Vetëm për:
 - t’ju japin një përgjigje informuese;
-- të përmirësojnë cilësinë dhe stabilitetin e shërbimit;
+- të mbajnë shërbimin të qëndrueshëm gjatë fazës së testimit;
 - të mbrojnë sistemin nga abuzimi;
 - të përmbushin detyrime ligjore, kur kërkohen.
 
-## 5. Baza ligjore
+## 6. Si funksionon me AI
 
-Përpunimi bazohet në:
-- interesin legjitim për ofrimin e një shërbimi informues publik;
-- nevojën teknike për funksionimin e platformës;
-- pëlqimin tuaj për sa i përket përdorimit vullnetar të chatbot-it.
-
-## 6. Si funksionon përpunimi me AI
-
-Pyetja juaj mund të dërgohet te shërbime teknike të nevojshme për:
-- kërkim në burime publike;
+Pyetja juaj mund të dërgohet përkohësisht te shërbime teknike të nevojshme për:
+- kërkim në burime publike zyrtare;
 - gjenerimin e përgjigjes me model AI.
 
-Këto shërbime përdoren vetëm për qëllimin e funksionimit të UAMD GPT.  
-**Mos përfshini të dhëna personale** në pyetje.
+Këto shërbime përdoren **vetëm** për funksionimin e UAMD GPT.  
+Gjatë fazës së testimit, mos përfshini të dhëna personale në pyetje.
 
-## 7. Ruajtja e të dhënave
+## 7. Ruajtja — çfarë mbetet dhe çfarë jo
 
-- Pyetjet mund të përpunohen përkohësisht për të dhënë përgjigjen.
-- Mund të përdoret cache e shkurtër teknike për përmirësimin e shpejtësisë.
-- Logjet teknike mund të ruhen për një periudhë të kufizuar për mirëmbajtje dhe siguri.
-- Ne nuk krijojmë profile personale të studentëve dhe nuk synojmë të mbledhim të dhëna private.
+- **Historia e chat-it:** nuk ruhet nga ne në një bazë të dhënash të përhershme.
+- **Pyetja për përgjigje:** përpunohet përkohësisht që të merret përgjigja.
+- **Cache teknike:** mund të mbahet për pak minuta/orë për shpejtësi.
+- **Logje hosting:** mund të mbahen përkohësisht për siguri dhe mirëmbajtje.
+- **Profile studentësh:** **nuk krijohen**.
+
+Në fazën e testimit, synimi është **sa më pak ruajtje e qëllimshme** e të dhënave tuaja.
 
 ## 8. Ndarja me të tretë
 
-Informacioni mund të ndahet vetëm me:
-- ofrues teknikë të nevojshëm për hosting, kërkim dhe AI;
+Informacioni mund të kalojë vetëm te:
+- ofrues teknikë të nevojshëm (hosting, kërkim, AI);
 - autoritete kompetente, kur kërkohet me ligj.
 
-Nuk shesim të dhëna personale.
+**Nuk shesim** dhe **nuk ndajmë** të dhëna për reklama.
 
 ## 9. Siguria
 
-Marrim masa të arsyeshme teknike dhe organizative për të mbrojtur shërbimin.  
-Asnjë sistem online nuk është 100% i sigurt; ju lutemi të shmangni dërgimin e informacionit privat.
+Marrim masa të arsyeshme teknike.  
+Asnjë sistem online nuk është 100% i sigurt — sidomos gjatë një faze testimi.  
+Prandaj: **mos dërgoni informacion privat**.
 
 ## 10. Të drejtat tuaja
 
-Sipas legjislacionit në fuqi për mbrojtjen e të dhënave, mund të kërkoni:
-- informacion për përpunimin;
-- korrigjim ose fshirje, kur zbatohet;
-- kufizim ose kundërshtim të përpunimit, kur zbatohet.
-
-Për kërkesa, shihni seksionin **Kontakt**.
+Sipas legjislacionit në fuqi, mund të kërkoni informacion, korrigjim, fshirje ose kufizim, kur zbatohet.  
+Për kërkesa: shihni **Kontakt**.
 
 ## 11. Fëmijët
 
-Shërbimi është informues publik. Nëse jeni nën moshën e lejuar për të dhënë pëlqim, përdoreni me mbikëqyrjen e një prindi/kujdestari.
+Nëse jeni nën moshën e lejuar për të dhënë pëlqim, përdoreni me mbikëqyrjen e një prindi/kujdestari.
 
 ## 12. Ndryshimet
 
-Kjo politikë mund të përditësohet. Data e fundit e përditësimit shfaqet në fund të kësaj faqeje.  
-Vazhdimi i përdorimit pas ndryshimeve nënkupton pranimin e versionit të ri.
+Gjatë fazës së testimit kjo politikë mund të ndryshojë shpesh.  
+Data e përditësimit shfaqet më poshtë. Vazhdimi i përdorimit pas ndryshimeve nënkupton pranimin e versionit të ri.
 
 ## 13. Kontakt për privatësinë
 
-Për pyetje rreth privatësisë:  
 **info@uamd.edu.al**  
-Universiteti “Aleksandër Moisiu” Durrës
+Universiteti “Aleksandër Moisiu” Durrës  
+Drejtoria e IT-së / Sektori i Inovacionit dhe Software-it
 
-**Përditësuar më:** 14 shtator 2026
+**Përditësuar më:** 14 shtator 2026  
+**Statusi:** Faza e testimit / zhvillimit
 `.trim(),
   },
 
