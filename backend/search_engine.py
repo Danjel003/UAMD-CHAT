@@ -123,6 +123,21 @@ INTENT_SEEDS: list[tuple[list[str], list[dict[str, str]]]] = [
         ],
     ),
     (
+        ["lektor", "pedagog", "profesor", "organika", "stafi", "personeli", "zv. rektor", "zëvendës"],
+        [
+            {"url": "https://uamd.edu.al/rektorati/", "title": "Rektorati"},
+            {"url": "https://uamd.edu.al/autoritetet-dhe-organet-drejtuese/", "title": "Autoritetet dhe organet drejtuese"},
+            {
+                "url": "https://uamd.edu.al/organika-e-personelit-akademik-ne-fakultetin-e-edukimit/",
+                "title": "Organika — Fakulteti i Edukimit",
+            },
+            {
+                "url": "https://uamd.edu.al/organika-e-personelit-akademik-ne-fakultetin-e-biznesit/",
+                "title": "Organika — Fakulteti i Biznesit",
+            },
+        ],
+    ),
+    (
         ["erasmus", "mobilitet", "mobiliteti", "shkëmbim", "shkembim", "nderkombetar", "ndërkombëtar", "ka171"],
         [
             {"url": "https://uamd.edu.al/marredheniet-me-jashte-dhe-projektet/", "title": "Marrëdhëniet me Jashtë dhe Projektet"},
@@ -331,22 +346,24 @@ def search_duckduckgo(query: str, max_results: int = MAX_RESULTS) -> list[dict[s
 def wp_site_search(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, Any]]:
     """Use the university WordPress search endpoint (+ REST API)."""
     results: list[dict[str, Any]] = []
-    # Prefer shorter keyword query — full sentences often return nothing from WP search
+    # Keep short name tokens (Edi, Ana, …) — critical for lecturer lookup
     tokens = [
         t
-        for t in re.findall(r"[a-zçëA-ZÇË]{4,}", query.lower())
+        for t in re.findall(r"[a-zçëA-ZÇË]{2,}", query.lower())
         if t
         not in {
             "cilat", "cili", "cfare", "çfarë", "jane", "janë", "eshte", "është",
             "mund", "duhet", "lutem", "juve", "kush", "kur", "ku", "sa", "nje", "një",
             "uamd", "universitet", "universiteti", "moisiu", "durres", "durrës",
+            "lektor", "lektori", "pedagog", "pedagogu", "profesor", "profesori",
+            "informacion", "info", "rreth", "biografi",
         }
     ]
-    search_q = " ".join(tokens[:5]) if tokens else query.strip()
+    search_q = " ".join(tokens[:6]) if tokens else query.strip()
 
     try:
         api = f"https://uamd.edu.al/wp-json/wp/v2/search?search={quote_plus(search_q)}&per_page={max_results}"
-        resp = requests.get(api, timeout=5, headers={"User-Agent": USER_AGENT})
+        resp = requests.get(api, timeout=6, headers={"User-Agent": USER_AGENT})
         if resp.status_code < 400:
             for row in resp.json() or []:
                 href = row.get("url")
@@ -366,13 +383,9 @@ def wp_site_search(query: str, max_results: int = MAX_RESULTS) -> list[dict[str,
     except Exception as exc:
         print(f"[search] WP REST error: {exc}")
 
-    # Skip slow HTML ?s= parse when REST already returned results
-    if results:
-        return _dedupe(results, max_results)
-
     try:
         url = f"https://uamd.edu.al/?s={quote_plus(search_q)}"
-        resp = requests.get(url, timeout=6, headers={"User-Agent": USER_AGENT})
+        resp = requests.get(url, timeout=8, headers={"User-Agent": USER_AGENT})
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
         for a in soup.select(
@@ -453,17 +466,24 @@ def crawl_uamd_site(query: str, max_results: int = MAX_RESULTS) -> list[dict[str
 
 def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, Any]]:
     """
-    Fast hybrid search on uamd.edu.al.
-    Prefer instant deep/intent hits; only call slow web providers when needed.
+    Hybrid search on uamd.edu.al.
+    Super-search for person/lecturer names: staff hubs + WP name search + DDG.
     """
-    from uamd_map import wants_erasmus, wants_program_list
+    from uamd_map import (
+        extract_person_name,
+        wants_erasmus,
+        wants_person_lookup,
+        wants_program_list,
+    )
 
     query = (query or "").strip()
     if not query:
         return []
 
-    wide = wants_program_list(query) or wants_erasmus(query)
-    limit = 16 if wide else min(max(max_results, 8), 10)
+    person = wants_person_lookup(query)
+    person_name = extract_person_name(query) if person else ""
+    wide = wants_program_list(query) or wants_erasmus(query) or person
+    limit = 20 if person else (16 if wide else min(max(max_results, 8), 10))
     specific: list[dict[str, Any]] = []
     fallback = [_as_hit(h["url"], h["title"], provider="hub") for h in ALWAYS_HUBS[:5]]
 
@@ -480,19 +500,34 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
         print(f"[search] intent seeds → {len(intent_hits)}")
         specific.extend(intent_hits)
 
+    if person:
+        for seed in (
+            ("https://uamd.edu.al/rektorati/", "Rektorati"),
+            ("https://uamd.edu.al/autoritetet-dhe-organet-drejtuese/", "Autoritetet"),
+            (
+                "https://uamd.edu.al/organika-e-personelit-akademik-ne-fakultetin-e-edukimit/",
+                "Organika Edukim",
+            ),
+            (
+                "https://uamd.edu.al/organika-e-personelit-akademik-ne-fakultetin-e-biznesit/",
+                "Organika Biznes",
+            ),
+        ):
+            specific.append(_as_hit(seed[0], seed[1], provider="intent"))
+
     strong = _dedupe(specific, limit)
-    # Fast path for simple curated intents — NOT for programs/erasmus
     if len(strong) >= 4 and (deep_hits or intent_hits) and not wide:
         results = _dedupe(strong + fallback, limit)
         print(f"[search] fast-path → {len(results)} urls")
         return results
 
-    # WP search: for Erasmus use focused keywords so results aren't diluted
     try:
         wp_query = query
         if wants_erasmus(query):
             wp_query = "Erasmus mobilitet studentor shkëmbim"
-        wp_hits = wp_site_search(wp_query, max_results=min(10, limit))
+        elif person and person_name:
+            wp_query = person_name
+        wp_hits = wp_site_search(wp_query, max_results=min(12, limit))
         if wp_hits:
             print(f"[search] wp_site_search → {len(wp_hits)}")
             specific.extend(wp_hits)
@@ -500,18 +535,21 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
         print(f"[search] wp_site_search failed: {exc}")
 
     strong = _dedupe(specific, limit)
-    if len(strong) >= 4 and not wants_erasmus(query):
+    if len(strong) >= 4 and not wants_erasmus(query) and not person:
         results = _dedupe(strong + fallback, limit)
         print(f"[search] mid-path → {len(results)} urls")
         return results
 
     for provider in (crawl_uamd_site, search_tavily, search_serpapi, search_duckduckgo):
         try:
-            q_for_provider = (
-                "Erasmus+ mobilitet studentor UAMD"
-                if wants_erasmus(query) and provider is search_duckduckgo
-                else query
-            )
+            if wants_erasmus(query) and provider is search_duckduckgo:
+                q_for_provider = "Erasmus+ mobilitet studentor UAMD"
+            elif person and person_name and provider is search_duckduckgo:
+                q_for_provider = f'"{person_name}" site:uamd.edu.al'
+            elif person and person_name:
+                q_for_provider = person_name
+            else:
+                q_for_provider = query
             hits = provider(q_for_provider, max_results=limit)
         except Exception as exc:
             print(f"[search] provider {provider.__name__} failed: {exc}")
@@ -519,11 +557,14 @@ def search_uamd(query: str, max_results: int = MAX_RESULTS) -> list[dict[str, An
         if hits:
             print(f"[search] {provider.__name__} → {len(hits)}")
             specific.extend(hits)
-        if len(_dedupe(specific, limit)) >= limit:
+        if len(_dedupe(specific, limit)) >= limit and not person:
             break
 
     results = _dedupe(specific + fallback, limit)
     if not results:
         results = _dedupe([_as_hit(u, "UAMD", provider="seed") for u in SEED_URLS], limit)
-    print(f"[search] final → {len(results)} urls")
+    print(
+        f"[search] final → {len(results)} urls"
+        + (f" | person={person_name}" if person_name else "")
+    )
     return results

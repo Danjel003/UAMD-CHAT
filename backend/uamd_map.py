@@ -7,6 +7,7 @@ Copyright (c) 2026 Danjel Kalari. All rights reserved.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Canonical faculty graph discovered from official UAMD pages.
@@ -175,6 +176,98 @@ ERASMUS_HUBS: list[dict[str, str]] = [
         "title": "Marrëdhëniet me Jashtë dhe Projektet",
     },
 ]
+
+STAFF_HUBS: list[dict[str, str]] = [
+    {"url": "https://uamd.edu.al/rektorati/", "title": "Rektorati"},
+    {"url": "https://uamd.edu.al/autoritetet-dhe-organet-drejtuese/", "title": "Autoritetet dhe organet drejtuese"},
+    {"url": "https://uamd.edu.al/fjala-e-rektorit/", "title": "Fjala e Rektorit"},
+    {
+        "url": "https://uamd.edu.al/organika-e-personelit-akademik-ne-fakultetin-e-edukimit/",
+        "title": "Organika — Fakulteti i Edukimit",
+    },
+    {
+        "url": "https://uamd.edu.al/organika-e-personelit-akademik-ne-fakultetin-e-biznesit/",
+        "title": "Organika — Fakulteti i Biznesit",
+    },
+]
+
+_STOP_WORDS = {
+    "cilat", "cili", "cfare", "çfarë", "jane", "janë", "eshte", "është", "esht",
+    "mund", "duhet", "lutem", "juve", "kush", "kur", "ku", "sa", "nje", "një",
+    "uamd", "universitet", "universiteti", "moisiu", "durres", "durrës",
+    "lektor", "lektori", "lektorja", "pedagog", "pedagogu", "pedagoge",
+    "profesor", "profesori", "profesoresha", "doktor", "doktoresha",
+    "informacion", "info", "rreth", "per", "për", "me", "nga", "dhe", "ose",
+    "te", "të", "ne", "në", "ma", "me", "jep", "trego", "thuaj", "a",
+}
+
+
+def extract_person_name(question: str) -> str:
+    """Extract a likely person name from the question for deep staff search."""
+    q = (question or "").strip()
+    if not q:
+        return ""
+
+    patterns = [
+        r"kush\s+(?:është|eshte|esht)\s+(.+?)[\?!.]*$",
+        r"(?:lektor(?:i|ja|e)?|pedagog(?:u|e)?|profesor(?:i|e|esha)?|prof\.?|dr\.?|doc\.?)\s+(.+?)[\?!.]*$",
+        r"(?:informacion|info|biografi|cv)\s+(?:për|per)\s+(.+?)[\?!.]*$",
+        r"rreth\s+(.+?)[\?!.]*$",
+    ]
+    for pat in patterns:
+        m = re.search(pat, q, flags=re.IGNORECASE)
+        if m:
+            name = re.sub(r"\s+", " ", m.group(1)).strip(" .?!,;:")
+            # drop trailing filler
+            name = re.sub(
+                r"\b(ne|në|uamd|universitet(?:i)?|moisiu|durrës|durres)\b.*$",
+                "",
+                name,
+                flags=re.IGNORECASE,
+            ).strip(" .?!,;:")
+            if len(name) >= 3:
+                return name
+
+    # Fallback: 2+ consecutive capitalized / name-like tokens
+    tokens = re.findall(r"[A-ZÇËÁÉÍÓÚ][a-zçëáéíóúë]+(?:\s+[A-ZÇË][a-zçëáéíóúë]+)+", q)
+    if tokens:
+        return tokens[0].strip()
+
+    # lowercase fallback: last 2 non-stop words (edi puka)
+    words = [w for w in re.findall(r"[A-Za-zÇçËë]{2,}", q) if w.lower() not in _STOP_WORDS]
+    if len(words) >= 2:
+        return " ".join(words[-2:])
+    if len(words) == 1 and len(words[0]) >= 4:
+        return words[0]
+    return ""
+
+
+def wants_person_lookup(question: str) -> bool:
+    q = (question or "").lower()
+    if wants_program_list(question) and not any(
+        k in q for k in ("lektor", "pedagog", "profesor", "kush është", "kush eshte")
+    ):
+        return False
+    cues = [
+        "kush është", "kush eshte", "kush esht",
+        "lektor", "pedagog", "profesor", "prof.", "dr.", "doc.",
+        "zv. rektor", "zëvendës rektor", "zv rektor", "dekan",
+        "biografi", "organika", "stafi", "personeli akademik",
+    ]
+    if any(c in q for c in cues):
+        return True
+    # bare name-like query: 1-4 tokens, no university topic keywords
+    name = extract_person_name(question)
+    if not name:
+        return False
+    topic = any(
+        k in q
+        for k in (
+            "program", "fakultet", "tarif", "orar", "erasmus", "pranim",
+            "kalendar", "kontakt", "bibliotek", "kampus",
+        )
+    )
+    return (not topic) and len(name.split()) <= 4
 
 
 def match_faculties(question: str) -> list[dict[str, Any]]:
@@ -347,6 +440,15 @@ def deep_urls_for_question(question: str, limit: int = 12) -> list[dict[str, str
     if wants_erasmus(question):
         for hub in ERASMUS_HUBS:
             urls.append({"url": hub["url"], "title": hub["title"], "provider": "deep"})
+
+    if wants_person_lookup(question):
+        for hub in STAFF_HUBS:
+            urls.append({"url": hub["url"], "title": hub["title"], "provider": "deep"})
+        # Staff bios live on department pages — pull them when looking up a person
+        for fac in FACULTIES:
+            urls.append({"url": fac["url"], "title": fac["name"], "provider": "deep"})
+            for dep in fac.get("departments") or []:
+                urls.append({"url": dep, "title": f"Departament — {fac['name']}", "provider": "deep"})
 
     # Deduplicate preserving order
     seen = set()

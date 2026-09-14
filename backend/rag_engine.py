@@ -21,7 +21,13 @@ from openai import OpenAI
 
 from scraper import content_hash, fetch_many
 from search_engine import search_uamd
-from uamd_map import catalog_context_for_question, wants_erasmus, wants_program_list
+from uamd_map import (
+    catalog_context_for_question,
+    extract_person_name,
+    wants_erasmus,
+    wants_person_lookup,
+    wants_program_list,
+)
 
 load_dotenv()
 
@@ -171,13 +177,26 @@ def simple_split(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_O
     return parts
 
 
-def _keyword_score(question: str, text: str) -> float:
-    q_tokens = [t for t in re.findall(r"[a-zçë0-9]{3,}", question.lower()) if t not in {"the", "and", "per", "nga", "nje", "një"}]
-    if not q_tokens:
-        return 0.0
+def _keyword_score(question: str, text: str, person_name: str = "") -> float:
+    q_tokens = [
+        t
+        for t in re.findall(r"[a-zçë0-9]{3,}", question.lower())
+        if t not in {"the", "and", "per", "nga", "nje", "një", "kush", "eshte", "është"}
+    ]
     hay = text.lower()
-    hits = sum(1 for t in q_tokens if t in hay)
-    return hits / max(len(q_tokens), 1)
+    score = 0.0
+    if q_tokens:
+        hits = sum(1 for t in q_tokens if t in hay)
+        score = hits / max(len(q_tokens), 1)
+    if person_name:
+        name = person_name.lower().strip()
+        if name and name in hay:
+            score += 1.0
+        else:
+            parts = [p for p in name.split() if len(p) >= 3]
+            if parts and all(p in hay for p in parts):
+                score += 0.8
+    return min(score, 1.5)
 
 
 class RAGEngine:
@@ -287,14 +306,24 @@ class RAGEngine:
                             self._embed_cache.pop(k, None)
         return np.vstack(vectors)
 
-    def _semantic_rerank(self, question: str, chunks: list[dict[str, Any]], top_k: int = TOP_K) -> list[dict[str, Any]]:
+    def _semantic_rerank(
+        self,
+        question: str,
+        chunks: list[dict[str, Any]],
+        top_k: int = TOP_K,
+        person_name: str = "",
+    ) -> list[dict[str, Any]]:
         if not chunks:
             return []
 
-        # Fast keyword pre-rank (no API)
+        # Fast keyword pre-rank (no API) — boost exact person-name hits
         pre: list[dict[str, Any]] = []
         for chunk in chunks:
-            kw = _keyword_score(question, chunk["content"] + " " + (chunk.get("title") or ""))
+            kw = _keyword_score(
+                question,
+                chunk["content"] + " " + (chunk.get("title") or ""),
+                person_name=person_name,
+            )
             item = dict(chunk)
             item["kw"] = kw
             item["score"] = kw
@@ -303,12 +332,11 @@ class RAGEngine:
 
         mode = USE_EMBEDDINGS
         strong_kw = pre and pre[0]["kw"] >= 0.35
-        use_emb = mode == "always" or (mode == "auto" and not strong_kw)
+        use_emb = mode == "always" or (mode == "auto" and not strong_kw and not person_name)
 
         if not use_emb or mode == "never":
             return pre[:top_k]
 
-        # Embed only the best keyword candidates (small, fast OpenAI call)
         candidates = pre[: max(top_k + 4, 10)]
         q_vec = self._embed([question])[0]
         doc_vecs = self._embed([c["content"] for c in candidates])
@@ -361,10 +389,13 @@ class RAGEngine:
 
         is_programs = wants_program_list(question)
         is_erasmus = wants_erasmus(question)
+        is_person = wants_person_lookup(question)
+        person_name = extract_person_name(question) if is_person else ""
+        deep_q = is_programs or is_erasmus or is_person
 
         pages_block = ""
         docs_for_list = source_docs or []
-        page_limit = 10 if (is_programs or is_erasmus) else 5
+        page_limit = 10 if deep_q else 5
         if docs_for_list:
             lines = [f"- {d.get('title') or 'Faqe UAMD'}: {d.get('url')}" for d in docs_for_list[:page_limit]]
             pages_block = "Faqet zyrtare të gjetura:\n" + "\n".join(lines) + "\n\n"
@@ -372,8 +403,8 @@ class RAGEngine:
             lines = [f"- {h.get('title') or 'UAMD'}: {h.get('url')}" for h in search_hits[:page_limit]]
             pages_block = "Rezultatet e kërkimit:\n" + "\n".join(lines) + "\n\n"
 
-        ctx_limit = 12 if (is_programs or is_erasmus) else 5
-        ctx_chars = 1400 if (is_programs or is_erasmus) else 900
+        ctx_limit = 12 if deep_q else 5
+        ctx_chars = 1600 if is_person else (1400 if deep_q else 900)
         context_block = "\n\n".join(
             f"[Burimi: {c.get('title') or 'UAMD'}] ({c.get('url')})\n{(c.get('content') or '')[:ctx_chars]}"
             for c in contexts[:ctx_limit]
@@ -407,6 +438,17 @@ class RAGEngine:
                 "dhe linke zyrtare.\n"
                 "- Nëse ke thirrje konkrete, përmend disa shembuj me afate/destinacione.\n"
                 "- Nuk vlen limiti i 6 fjalive; jep përmbledhje të plotë.\n"
+            )
+        elif is_person:
+            max_tokens = 550
+            who = person_name or "këtij personi"
+            extra_rules = (
+                f"- Pyetja është për personin/lektorin: {who}.\n"
+                "- Nxirr nga konteksti çdo biografi / rol / titull / departament / fakultet që ekziston.\n"
+                "- Nëse emri gjendet, jep përmbledhje të plotë të informacionit publik.\n"
+                "- Nëse emri NUK gjendet në kontekst, thuaj qartë që nuk u gjet informacion publik "
+                "për këtë emër në faqen zyrtare dhe jep linkun e rektoratit/organikës.\n"
+                "- Mos invento biografi.\n"
             )
 
         user_prompt = (
@@ -465,9 +507,11 @@ class RAGEngine:
 
         is_programs = wants_program_list(question)
         is_erasmus = wants_erasmus(question)
-        wide = is_programs or is_erasmus
+        is_person = wants_person_lookup(question)
+        person_name = extract_person_name(question) if is_person else ""
+        wide = is_programs or is_erasmus or is_person
 
-        search_hits = search_uamd(question, max_results=16 if wide else max(TOP_K, 8))
+        search_hits = search_uamd(question, max_results=20 if is_person else (16 if wide else max(TOP_K, 8)))
         if not search_hits:
             search_hits = [
                 {"url": "https://uamd.edu.al/", "title": "UAMD", "snippet": "", "provider": "fallback"}
@@ -475,17 +519,32 @@ class RAGEngine:
 
         urls = [h["url"] for h in search_hits]
         need_pdfs = wants_pdfs(question) or is_programs
-        expand = is_programs or any(
+        expand = is_programs or is_person or any(
             k in question.lower()
             for k in ("bachelor", "master", "dega", "deget", "fakultet")
         )
-        max_docs = 10 if wide else MAX_DOCS
+        max_docs = 12 if is_person else (10 if wide else MAX_DOCS)
         docs = fetch_many(
             urls,
             max_docs=max_docs,
             include_pdfs=need_pdfs,
             expand_faculty=expand,
         )
+
+        # For person queries, prioritize docs that actually contain the name
+        if is_person and person_name and docs:
+            name_l = person_name.lower()
+            parts = [p for p in name_l.split() if len(p) >= 3]
+
+            def _name_hit(doc: dict[str, Any]) -> int:
+                hay = f"{doc.get('title') or ''} {doc.get('text') or ''}".lower()
+                if name_l in hay:
+                    return 2
+                if parts and all(p in hay for p in parts):
+                    return 1
+                return 0
+
+            docs = sorted(docs, key=_name_hit, reverse=True)
 
         catalog_block = catalog_context_for_question(question)
 
@@ -502,9 +561,23 @@ class RAGEngine:
         if wide:
             chunks: list[dict[str, Any]] = []
             for doc in docs:
+                text = doc.get("text") or ""
+                # For person search, prefer a window around the name
+                if is_person and person_name:
+                    low = text.lower()
+                    idx = low.find(person_name.lower())
+                    if idx < 0:
+                        for p in person_name.lower().split():
+                            if len(p) >= 3 and p in low:
+                                idx = low.find(p)
+                                break
+                    if idx >= 0:
+                        start = max(0, idx - 400)
+                        end = min(len(text), idx + 1200)
+                        text = text[start:end]
                 lead = (
                     f"{doc.get('title') or ''}\n{doc.get('url') or ''}\n"
-                    f"{(doc.get('text') or '')[:1200]}"
+                    f"{text[:1400]}"
                 ).strip()
                 if len(lead) >= 40:
                     chunks.append(
@@ -516,7 +589,7 @@ class RAGEngine:
                         }
                     )
                 for i, content in enumerate(
-                    simple_split(doc["text"], chunk_size=800, overlap=80)[:5]
+                    simple_split(doc.get("text") or "", chunk_size=800, overlap=80)[:5]
                 ):
                     if len(content.strip()) < 40:
                         continue
@@ -538,7 +611,9 @@ class RAGEngine:
                         "title": "Lista e plotë e programeve (katalog zyrtar)",
                     },
                 )
-            ranked = self._semantic_rerank(question, chunks[:40], top_k=12)
+            ranked = self._semantic_rerank(
+                question, chunks[:50], top_k=12, person_name=person_name
+            )
         else:
             chunks = self._chunk_documents(docs)
             ranked = self._semantic_rerank(question, chunks, top_k=TOP_K)
