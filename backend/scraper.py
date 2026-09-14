@@ -27,9 +27,9 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
 REQUEST_TIMEOUT = 8
-MAX_HTML_CHARS = 14_000
-MAX_PDF_CHARS = 16_000
-MAX_DOWNLOAD_BYTES = 5 * 1024 * 1024
+MAX_HTML_CHARS = 55_000
+MAX_PDF_CHARS = 24_000
+MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
 PAGE_CACHE_TTL = 3600  # 1 hour
 MAX_WORKERS = 8
 
@@ -103,7 +103,7 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-def extract_html_text(html: str, base_url: str) -> dict[str, Any]:
+def extract_html_text(html: str, base_url: str, prefer_name: str = "") -> dict[str, Any]:
     soup = BeautifulSoup(html, "lxml")
 
     for tag in soup(["script", "style", "noscript", "svg", "iframe", "form"]):
@@ -168,7 +168,25 @@ def extract_html_text(html: str, base_url: str) -> dict[str, Any]:
     if extras:
         text = (text + "\n\n" + "\n\n".join(extras)).strip()
     if len(text) > MAX_HTML_CHARS:
-        text = text[:MAX_HTML_CHARS]
+        if prefer_name:
+            low = text.lower()
+            needle = prefer_name.lower().strip()
+            idx = low.find(needle) if needle else -1
+            if idx < 0 and needle:
+                for p in needle.split():
+                    if len(p) >= 3:
+                        idx = low.find(p)
+                        if idx >= 0:
+                            break
+            if idx >= 0:
+                half = MAX_HTML_CHARS // 2
+                start = max(0, idx - half // 2)
+                end = min(len(text), start + MAX_HTML_CHARS)
+                text = text[start:end]
+            else:
+                text = text[:MAX_HTML_CHARS]
+        else:
+            text = text[:MAX_HTML_CHARS]
 
     pdf_links: list[str] = []
     file_links: list[str] = []
@@ -255,7 +273,7 @@ def _cache_set(url: str, doc: dict[str, Any]) -> None:
         _page_cache[url] = (time.time(), dict(doc))
 
 
-def fetch_url(url: str, use_cache: bool = True) -> dict[str, Any]:
+def fetch_url(url: str, use_cache: bool = True, prefer_name: str = "") -> dict[str, Any]:
     """Download and extract content from an allowed official URL."""
     url = normalize_url(url)
     if not is_allowed_url(url):
@@ -268,7 +286,7 @@ def fetch_url(url: str, use_cache: bool = True) -> dict[str, Any]:
             "error": "domain_not_allowed",
         }
 
-    if use_cache:
+    if use_cache and not prefer_name:
         cached = _cache_get(url)
         if cached is not None:
             cached["cached"] = True
@@ -347,7 +365,7 @@ def fetch_url(url: str, use_cache: bool = True) -> dict[str, Any]:
                 }
             else:
                 html = raw.decode(resp.encoding or "utf-8", errors="replace")
-                extracted = extract_html_text(html, final_url)
+                extracted = extract_html_text(html, final_url, prefer_name=prefer_name)
                 doc = {
                     "url": final_url,
                     "title": extracted["title"],
@@ -381,6 +399,7 @@ def fetch_many(
     max_docs: int = 6,
     include_pdfs: bool = False,
     expand_faculty: bool = False,
+    prefer_name: str = "",
 ) -> list[dict[str, Any]]:
     """Fetch unique official URLs in parallel (optional faculty expansion)."""
     from uamd_map import FACULTIES
@@ -400,7 +419,9 @@ def fetch_many(
         return results
 
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(pending))) as pool:
-        futures = {pool.submit(fetch_url, url): url for url in pending}
+        futures = {
+            pool.submit(fetch_url, url, True, prefer_name): url for url in pending
+        }
         for fut in as_completed(futures):
             doc = fut.result()
             if doc.get("ok") and doc.get("text"):

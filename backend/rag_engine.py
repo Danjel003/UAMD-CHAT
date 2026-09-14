@@ -529,6 +529,7 @@ class RAGEngine:
             max_docs=max_docs,
             include_pdfs=need_pdfs,
             expand_faculty=expand,
+            prefer_name=person_name,
         )
 
         # For person queries, prioritize docs that actually contain the name
