@@ -441,6 +441,15 @@ def _pick_precise_sources(
             scored.append((s, url))
 
     scored.sort(key=lambda x: x[0], reverse=True)
+
+    # For leadership/role questions keep only strong canonical pages
+    q = (question or "").lower()
+    if any(k in q for k in ("rektor", "rektorat", "zv. rektor", "zëvendës rektor")):
+        strong = [(s, u) for s, u in scored if s >= 40 or _url_path(u) in _CANONICAL_PATHS]
+        if strong:
+            scored = strong
+            limit = min(limit, 2)
+
     out = [u for _, u in scored[:limit]]
 
     # Last resort: best non-generic doc
@@ -467,6 +476,9 @@ def _sort_docs_by_authority(
         ),
         reverse=True,
     )
+
+
+class RAGEngine:
     def __init__(self) -> None:
         self._embedding_model = None
         self._embedding_backend = EMBEDDING_BACKEND
