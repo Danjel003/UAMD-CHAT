@@ -140,6 +140,8 @@ def extract_html_text(html: str, base_url: str, prefer_name: str = "") -> dict[s
         "#kingster-page-wrapper",
         ".gdlr-core-page-builder-body",
         ".gdlr-core-pbf-wrapper",
+        ".gdlr-core-accordion-item-tab",
+        ".gdlr-core-accordion-item-content-wrapper",
         ".entry-content",
         ".post-content",
         ".elementor-widget-theme-post-content",
@@ -153,8 +155,23 @@ def extract_html_text(html: str, base_url: str, prefer_name: str = "") -> dict[s
         body = soup.find("body") or soup
         candidates.append(clean_text(body.get_text("\n", strip=True)))
 
-    # Longest block wins (avoids empty theme "content" shells)
-    text = max(candidates, key=len)
+    # For person lookup: prefer accordion/bio blocks that contain the name
+    text = ""
+    if prefer_name:
+        needle = prefer_name.lower().strip()
+        parts = [p for p in needle.split() if len(p) >= 3]
+        named = [
+            c
+            for c in candidates
+            if (needle and needle in c.lower())
+            or (parts and all(p in c.lower() for p in parts))
+        ]
+        if named:
+            # Keep the most relevant bios (short accordion cards first), then longest
+            named.sort(key=lambda c: (0 if len(c) < 4000 else 1, -len(c)))
+            text = "\n\n".join(named[:8])
+    if not text:
+        text = max(candidates, key=len)
     if footer_text and footer_text in text:
         text = text.replace(footer_text, "").strip()
 

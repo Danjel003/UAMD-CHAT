@@ -637,7 +637,9 @@ class RAGEngine:
                 sources.append(d["url"])
 
         result = {"answer": answer, "sources": sources[:12]}
-        if "nuk gjeta një përgjigje" not in answer.lower():
+        # Don't cache empty person lookups — allow retry after scrape improvements
+        cacheable = "nuk gjeta një përgjigje" not in answer.lower()
+        if cacheable and "nuk u gjet informacion publik" not in answer.lower():
             self._query_cache[cache_key] = {**result, "ts": time.time()}
 
         print(
